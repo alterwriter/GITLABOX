@@ -101,3 +101,7 @@ GITLABOX/
 ## Catatan privasi
 
 Report yang dihasilkan berisi **nama repo, nama branch, nama, dan email** kontributor. Folder `reports/` dan `repos.txt` sudah masuk `.gitignore`. Jangan commit hasil scan ke repo publik. Detailnya ada di [Keamanan](docs/08-keamanan.md).
+
+## Lisensi
+
+[MIT](LICENSE). Bebas dipakai, dimodifikasi, dan didistribusikan, asal notice copyright dan lisensinya tetap disertakan.
