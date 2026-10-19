@@ -1,146 +1,146 @@
 # 3. Branch & Committer Report
 
-[← Koneksi & autentikasi](02-koneksi-autentikasi.md) · [Format output →](04-format-output.md)
+[← Connection & authentication](02-connection-and-auth.md) · [Output format →](04-output-format.md)
 
-Tool ini menjawab pertanyaan: **"Di repo ini ada branch apa saja, dan berapa orang yang commit ke masing-masing branch?"** Hasilnya diurutkan dari committer terbanyak ke paling sedikit.
+This tool answers: **"Which branches does this repo have, and how many people have committed to each one?"** Results are sorted from the most committers to the fewest.
 
-Contoh kegunaannya:
-- Audit branch: cari branch yang ramai, branch yang sepi, atau branch yang sudah lama gak disentuh.
-- Inventaris kontributor per repo atau per tim, misalnya buat review akses atau onboarding/offboarding.
-- Bahan laporan rutin (misal per bulan) yang diekspor ke Sheets/Excel.
+Typical uses:
+- Branch audits: find busy branches, quiet branches, and branches nobody has touched in a long time.
+- Contributor inventory per repo or per team, e.g. for access reviews or onboarding/offboarding.
+- Recurring reports (e.g. monthly) exported to Sheets/Excel.
 
-## Sumber repo
+## Repo sources
 
-Ada 5 cara menentukan repo yang mau di-scan. Semuanya bisa dicampur dalam satu run.
+There are 5 ways to choose which repos to scan, and they can all be combined in one run.
 
-| Sumber | Menu interaktif | Flag | Di file `.txt` |
+| Source | Interactive menu | Flag | In a `.txt` file |
 |---|---|---|---|
-| 1 / beberapa repo | Ketik langsung | `-r REPO` (bisa diulang / dipisah koma) | baris biasa |
-| Semua repo akun kamu | Semua repo yang bisa diakses akun gw | `--mine`, `-a SCOPE` | `account:SCOPE`, `mine` |
-| File `.txt` | Bulk dari file .txt | `-f FILE` | — |
-| Satu group | Semua project di group | `-g GROUP` | `group:PATH` |
-| Argumen posisi | — | `./gitlabbox.sh branches a/b c/d` | — |
+| One / several repos | Type them in | `-r REPO` (repeatable / comma-separated) | a plain line |
+| All repos your account can access | All repos my account can access | `--mine`, `-a SCOPE` | `account:SCOPE`, `mine` |
+| A `.txt` file | Bulk from a .txt file | `-f FILE` | — |
+| One group | Every project in a group | `-g GROUP` | `group:PATH` |
+| Positional arguments | — | `./gitlabbox.sh branches a/b c/d` | — |
 
-### Format penulisan repo
+### How to write a repo
 
 ```text
 my-group/my-app                                       # path (namespace/project)
-my-group/sub/deep/project                             # subgroup bertingkat
+my-group/sub/deep/project                             # nested subgroups
 12345                                                 # project ID
-https://gitlab.example.com/my-group/my-app            # URL web
-https://gitlab.example.com/my-group/my-app/-/tree/dev # URL apa saja dari browser (/-/... dibuang)
-https://gitlab.example.com/my-group/my-app.git        # clone URL HTTPS
-git@gitlab.example.com:my-group/my-app.git            # clone URL SSH
-ssh://git@gitlab.example.com:2222/my-group/my-app.git # SSH dengan port
-group:my-org/backend                                  # semua project di group + subgroup
-account:member                                        # semua repo yang akun kamu member
-account:developer@gitlab.example.com                  # scope + instance tertentu
+https://gitlab.example.com/my-group/my-app            # web URL
+https://gitlab.example.com/my-group/my-app/-/tree/dev # any URL from the browser (/-/... is dropped)
+https://gitlab.example.com/my-group/my-app.git        # HTTPS clone URL
+git@gitlab.example.com:my-group/my-app.git            # SSH clone URL
+ssh://git@gitlab.example.com:2222/my-group/my-app.git # SSH with a port
+group:my-org/backend                                  # every project in the group + subgroups
+account:member                                        # every repo your account is a member of
+account:developer@gitlab.example.com                  # scope + specific instance
 mine                                                  # = account:member
 ```
 
-Aturan parsing:
-- Teks setelah ` #` dianggap komentar. Baris kosong dan baris yang diawali `#` dilewati.
-- Line ending Windows (CRLF) aman.
-- Query string, fragment, `/-/...`, `.git`, dan `/` di akhir dibuang.
-- **Duplikat dibuang**, termasuk kalau repo yang sama ditulis dengan format berbeda (misal `a/b` dan `https://<host-profile>/a/b`).
-- Mode interaktif "Ketik langsung" menerima beberapa repo yang dipisah koma atau spasi.
+Parsing rules:
+- Anything after ` #` is a comment. Blank lines and lines starting with `#` are skipped.
+- Windows line endings (CRLF) are fine.
+- Query strings, fragments, `/-/...`, `.git`, and trailing `/` are removed.
+- **Duplicates are dropped**, even when the same repo is written in different forms (e.g. `a/b` and `https://<profile-host>/a/b`).
+- The interactive "Type them in" option accepts several repos separated by commas or spaces.
 
-Template lengkapnya ada di [`repos.example.txt`](../repos.example.txt). Salin jadi `repos.txt` (file ini di-ignore git).
+The full template is in [`repos.example.txt`](../repos.example.txt). Copy it to `repos.txt` (that file is git-ignored).
 
-### Mode "semua repo akun saya"
+### "All repos my account can access" mode
 
-Daftar repo diambil dari `GET /projects` memakai token kamu. Scope menentukan project mana saja yang ikut:
+The repo list comes from `GET /projects` using your token. The scope decides which projects are included:
 
-| Scope | Parameter API | Isi |
+| Scope | API parameters | Contents |
 |---|---|---|
-| `member` *(default)* | `membership=true` | Semua project di mana kamu member, langsung maupun lewat group. Sama seperti "Your projects" di UI. |
-| `owned` | `owned=true` | Project yang kamu owner, biasanya yang ada di namespace pribadi |
-| `reporter` | `membership=true&min_access_level=20` | Role minimal Reporter |
-| `developer` | `membership=true&min_access_level=30` | Role minimal Developer |
-| `maintainer` | `membership=true&min_access_level=40` | Role minimal Maintainer |
-| `all` | — | Semua project yang visible buat kamu, termasuk internal/public walau bukan member. **Cuma bisa di self-hosted.** Di gitlab.com diblok karena isinya semua repo publik sedunia. |
+| `member` *(default)* | `membership=true` | Every project you are a member of, directly or through a group. Same as "Your projects" in the UI. |
+| `owned` | `owned=true` | Projects you own, usually the ones in your personal namespace |
+| `reporter` | `membership=true&min_access_level=20` | Role Reporter or higher |
+| `developer` | `membership=true&min_access_level=30` | Role Developer or higher |
+| `maintainer` | `membership=true&min_access_level=40` | Role Maintainer or higher |
+| `all` | — | Every project visible to you, including internal/public ones you are not a member of. **Self-hosted only.** Blocked on gitlab.com, where it would mean every public repo in the world. |
 
-Catatan:
-- **Wajib pakai token.** Tanpa token gak ada "akun" yang bisa dicek.
-- Project yang di-archive **dilewati**, kecuali kalau pakai `--include-archived`.
-- Hasilnya tergantung jenis token. Project/Group Access Token cuma "melihat" project/group miliknya sendiri, jadi buat mode ini sebaiknya pakai **PAT**.
-- Hasil bisa disaring pakai `--repo-filter` (glob, dipisah koma), misalnya `--repo-filter 'payments/*,*-service'`.
+Notes:
+- **A token is required.** Without one there is no "account" to look up.
+- Archived projects are **skipped** unless you pass `--include-archived`.
+- Results depend on the token type. Project/Group Access Tokens only "see" their own project/group, so use a **PAT** for this mode.
+- Results can be narrowed with `--repo-filter` (comma-separated globs), e.g. `--repo-filter 'payments/*,*-service'`.
 
-Di menu interaktif, setelah daftar repo diambil, kamu dapat preview dan bisa menyaring dulu sebelum scan:
+In the interactive menu you get a preview of the list, and you can filter it before scanning:
 
 ```
-  ✔ Scope repo akun lu › Semua yang gw member (rekomendasi)
-  ✔ Ikut sertain project yang di-archive? › Tidak
-  ✔ Akun @username: 87 project (scope: member · gitlab.example.com)
+  ✔ Account repo scope › Everything I'm a member of (recommended)
+  ✔ Include archived projects? › No
+  ✔ Account @username: 87 projects (scope: member · gitlab.example.com)
     • backend/api
     • backend/worker
     • platform/infra
-    … +79 lagi
-  ▲ 87 repo itu banyak — saran: pakai rentang 90 hari / filter branch biar cepet.
-  ? Lanjut?
-  ❯ ▶  Scan 87 project ini
-    🔍 Filter nama repo
-    ←  Batal
+    … +79 more
+  ▲ 87 repos is a lot — tip: use a 90-day range / branch filter to speed things up.
+  ? Continue?
+  ❯ ▶  Scan these 87 projects
+    🔍 Filter by repo name
+    ←  Cancel
 ```
 
-### Mode group
+### Group mode
 
-`-g my-org/backend` atau `group:my-org/backend` mengambil semua project di group itu, **termasuk subgroup**, yang belum di-archive. Daftarnya bisa disaring dengan `--repo-filter` dan ditambah project archived dengan `--include-archived`.
+`-g my-org/backend` or `group:my-org/backend` fetches every non-archived project in that group, **including subgroups**. The list can be narrowed with `--repo-filter`, and archived projects can be added with `--include-archived`.
 
-## Alur interaktif
+## Interactive flow
 
 ```bash
 ./gitlabbox.sh     # → 🌿 Branch & Committer Report
 ```
 
-| # | Pertanyaan | Pilihan |
+| # | Question | Choices |
 |---|---|---|
-| 1 | Pakai koneksi yang mana? | Cuma muncul kalau ada lebih dari 1 profile (atau ada profile `env`) |
-| 2 | Repo-nya dari mana? | Ketik langsung · Semua repo akun · File .txt · Group |
-| 3 | Hitung commit dari kapan? | Semua history · 30 · 90 · 180 · 365 hari · Custom |
-| 4 | Opsi lanjutan | **Pakai default** atau **Atur sendiri**: filter branch, author/committer, batas commit (1.000 / 5.000 / 20.000 / tanpa batas), jumlah worker (1–32) |
-| 5 | Format report | JSON · CSV · JSON + CSV |
-| 6 | Folder output | Default `reports/` di folder tool |
-| 7 | Ringkasan → Gas? | 🚀 Gas · ✏️ Ulang dari awal · ✖ Batal |
-| 8 | Next? | Balik ke menu · 📂 Buka folder report · Keluar |
+| 1 | Which connection? | Only shown when there is more than one profile (or an `env` profile) |
+| 2 | Where do the repos come from? | Type them in · All repos my account can access · .txt file · Group |
+| 3 | Count commits since when? | Full history · 30 · 90 · 180 · 365 days · Custom |
+| 4 | Advanced options | **Use defaults** or **Customize**: branch filter, author/committer, commit cap (1,000 / 5,000 / 20,000 / no limit), worker count (1–32) |
+| 5 | Report format | JSON · CSV · JSON + CSV |
+| 6 | Output folder | Defaults to `reports/` in the tool folder |
+| 7 | Summary → Go? | 🚀 Run it · ✏️ Start over · ✖ Cancel |
+| 8 | Next? | Back to the main menu · 📂 Open the report folder · Quit |
 
-Ringkasan sebelum jalan:
+The summary before running:
 
 ```
-  ╭─ Siap jalan ─────────────────────────────────────────────────────────────╮
-  │ Koneksi  kantor · gitlab.example.com                                     │
-  │ Repo     akun @username · scope member · 12 project (filter 'backend/*') │
-  │ Rentang  90 hari terakhir                                                │
-  │ Opsi     filter 'main,release/*' · author · max 5000 commit/branch · 6 … │
-  │ Output   BOTH → ~/GITLABOX/reports                                       │
-  ╰──────────────────────────────────────────────────────────────────────────╯
+  ╭─ Ready to run ─────────────────────────────────────────────────────────────────╮
+  │ Connect  work · gitlab.example.com                                             │
+  │ Repos    account @username · scope member · 12 projects (filter 'backend/*')   │
+  │ Range    last 90 days                                                          │
+  │ Options  filter 'main,release/*' · author · max 5000 commits/branch · 6 work…  │
+  │ Output   BOTH → ~/GITLABOX/reports                                             │
+  ╰────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-Selama scan, setiap repo melewati 3 tahap: resolve project, ambil daftar branch (dengan counter), lalu hitung committer per branch (dengan progress bar). Setelah itu tabel top branch langsung ditampilkan:
+During the scan each repo goes through 3 stages: resolve the project, fetch the branch list (with a live counter), and count committers per branch (with a progress bar). The top-branches table is shown right after:
 
 ```
   [2/12] backend/worker
   ✔ Project backend/worker · id 512 · private · default: main · gitlab.example.com
-  ✔ 3 dari 144 branch cocok filter main,release/*
-  ⠼ ████████████████████░░░░░░░░░░  66% 2/3 ngitung committer per branch (6 worker)
+  ✔ 3 of 144 branches match filter main,release/*
+  ⠼ ████████████████████░░░░░░░░░░  66% 2/3 counting committers per branch (6 workers)
 ```
 
-Kalau repo yang di-scan lebih dari satu, di akhir ada **leaderboard lintas repo** (top 10 branch paling ramai dari semua repo), lalu box ringkasan:
+When more than one repo is scanned, you also get a **cross-repo leaderboard** at the end (the 10 busiest branches across all repos), followed by a summary box:
 
 ```
-  ╭─ Report siap ───────────────────────────────────────────────────────────────╮
-  │ Repo     11 sukses · 1 gagal                                                │
-  │ Branch   36 dianalisis                                                      │
-  │ Rentang  sejak 2026-07-21 (90 hari)                                         │
-  │ Durasi   1m 12s                                                             │
+  ╭─ Report ready ──────────────────────────────────────────────────────────────╮
+  │ Repos    11 succeeded · 1 failed                                            │
+  │ Branches 36 analyzed                                                        │
+  │ Range    since 2026-07-21 (90 days)                                         │
+  │ Duration 1m 12s                                                             │
   │ JSON     reports/branch-committers_bulk-12repos_20261019-101500.json        │
   │ CSV      reports/branch-committers_bulk-12repos_20261019-101500.csv         │
   ╰─────────────────────────────────────────────────────────────────────────────╯
 
-  ✖ team/legacy-app — 403 Forbidden — token kurang scope (butuh read_api) atau role-nya gak cukup.
+  ✖ team/legacy-app — 403 Forbidden — token lacks scope (read_api required) or your role is too low.
 ```
 
-### Membaca tabel
+### Reading the table
 
 ```
     #  BRANCH                                  COMMITTERS            COMMITS  LAST        FLAGS  TOP COMMITTER
@@ -148,123 +148,123 @@ Kalau repo yang di-scan lebih dari satu, di akhir ada **leaderboard lintas repo*
     2  feature/checkout-v2                     ██████░░░░░░░░   11     5000+  2026-10-07  · · M  Dev C (88)
 ```
 
-| Kolom | Arti |
+| Column | Meaning |
 |---|---|
-| `COMMITTERS` | Jumlah orang unik (berdasarkan email) + bar yang dinormalisasi terhadap branch teramai di repo itu |
-| `COMMITS` | Jumlah commit yang dibaca. **`+`** artinya terpotong oleh `--max-commits`, jadi angka committer bisa lebih kecil dari aslinya. |
-| `LAST` | Tanggal commit terakhir di ujung branch |
-| `FLAGS` | `D` = default branch · `P` = protected · `M` = sudah di-merge ke default branch |
-| `TOP COMMITTER` | Orang dengan commit terbanyak di branch itu (jumlah commit) |
+| `COMMITTERS` | Number of unique people (by email) + a bar normalized to the busiest branch in that repo |
+| `COMMITS` | Number of commits read. **`+`** means it hit `--max-commits`, so the committer count may be lower than the real one. |
+| `LAST` | Date of the latest commit at the branch tip |
+| `FLAGS` | `D` = default branch · `P` = protected · `M` = merged into the default branch |
+| `TOP COMMITTER` | The person with the most commits on that branch (commit count) |
 
-Secara default tabel di layar cuma menampilkan 10 branch teratas per repo (bisa diubah dengan `--rows`). **File report selalu berisi semua branch.**
+By default the on-screen table only shows the top 10 branches per repo (change it with `--rows`). **The report file always contains every branch.**
 
-## Referensi CLI
+## CLI reference
 
 ```bash
-./gitlabbox.sh branches [opsi] [REPO ...]
+./gitlabbox.sh branches [options] [REPO ...]
 ```
 
-### Sumber repo
+### Repo sources
 
-| Opsi | Keterangan |
+| Option | Description |
 |---|---|
-| `-r, --repo REPO` | Path / ID / URL. Bisa diulang, atau beberapa sekaligus dipisah koma/spasi. |
-| `-f, --file FILE` | File `.txt`, 1 repo per baris |
-| `-g, --group GROUP` | Semua project di group + subgroup |
-| `-a, --account SCOPE` | Semua project yang bisa diakses akun: `member` · `owned` · `reporter` · `developer` · `maintainer` · `all` |
-| `--mine` | Singkatan dari `--account member` |
-| `--repo-filter GLOB` | Saring hasil `-g` / `-a`, glob dipisah koma |
-| `--include-archived` | Ikutkan project archived di hasil `-g` / `-a` |
+| `-r, --repo REPO` | Path / ID / URL. Repeatable, or several at once separated by commas/spaces. |
+| `-f, --file FILE` | `.txt` file, one repo per line |
+| `-g, --group GROUP` | Every project in the group + subgroups |
+| `-a, --account SCOPE` | Every project your account can access: `member` · `owned` · `reporter` · `developer` · `maintainer` · `all` |
+| `--mine` | Shorthand for `--account member` |
+| `--repo-filter GLOB` | Filter `-g` / `-a` results, comma-separated globs |
+| `--include-archived` | Include archived projects in `-g` / `-a` results |
 
-### Koneksi
+### Connection
 
-| Opsi | Keterangan |
+| Option | Description |
 |---|---|
-| `-p, --profile NAME` | Profile yang dipakai. Default: profile default. Kalau gak ada config: `GITLAB_URL` + `GITLAB_TOKEN`. |
+| `-p, --profile NAME` | Profile to use. Default: the default profile. Without a config: `GITLAB_URL` + `GITLAB_TOKEN`. |
 
-### Analisis
+### Analysis
 
-| Opsi | Default | Keterangan |
+| Option | Default | Description |
 |---|---|---|
-| `-d, --since-days N` | semua history | Cuma hitung commit N hari terakhir (`since=` di API) |
-| `--all-history` | — | Paksa semua history |
-| `-m, --max-commits N` | `5000` | Batas commit yang dibaca per branch. `0` = tanpa batas. |
-| `-b, --branch-filter GLOB` | semua | Filter nama branch, glob dipisah koma |
-| `--identity WHO` | `author` | `author` atau `committer` (lihat [cara kerja](05-cara-kerja.md#author-vs-committer)) |
-| `-w, --workers N` | `6` | Jumlah request paralel per repo |
-| `--top N` | `5` | Jumlah top committer per branch di report |
+| `-d, --since-days N` | full history | Only count commits from the last N days (`since=` in the API) |
+| `--all-history` | — | Force full history |
+| `-m, --max-commits N` | `5000` | Max commits read per branch. `0` = no limit. |
+| `-b, --branch-filter GLOB` | all | Branch name filter, comma-separated globs |
+| `--identity WHO` | `author` | `author` or `committer` (see [how it works](05-how-it-works.md#author-vs-committer)) |
+| `-w, --workers N` | `6` | Parallel requests per repo |
+| `--top N` | `5` | Top committers per branch in the report |
 
 ### Output
 
-| Opsi | Default | Keterangan |
+| Option | Default | Description |
 |---|---|---|
 | `-F, --format FMT` | `json` | `json` · `csv` · `both` |
-| `-o, --out PATH` | `reports/` | Bisa berupa folder, nama file (`x.json` / `x.csv`, pasangannya ikut nama yang sama), atau `-` buat stdout (cuma 1 format) |
-| `--rows N` | `10` | Jumlah baris tabel per repo di layar |
+| `-o, --out PATH` | `reports/` | A folder, a file name (`x.json` / `x.csv`, the other format uses the same base name), or `-` for stdout (one format only) |
+| `--rows N` | `10` | Table rows per repo on screen |
 
-Opsi panjang juga bisa ditulis dengan `=`, misalnya `--format=csv` atau `--since-days=30`.
+Long options also accept `=`, e.g. `--format=csv` or `--since-days=30`.
 
-### Glob (filter branch & repo)
+### Globs (branch & repo filters)
 
-- Pakai pattern matching bash: `*` (apa saja, **termasuk `/`**), `?` (1 karakter), `[abc]`.
-- Beberapa pola dipisah koma. Spasi di sekitar koma diabaikan.
-- Contoh filter branch: `main,develop,release/*,hotfix-*`
-- Contoh filter repo: `backend/*,*-service,platform/infra`
+- Bash pattern matching: `*` (anything, **including `/`**), `?` (one character), `[abc]`.
+- Separate several patterns with commas. Spaces around commas are ignored.
+- Branch filter example: `main,develop,release/*,hotfix-*`
+- Repo filter example: `backend/*,*-service,platform/infra`
 
-### Nama file output
+### Output file names
 
-`branch-committers_<slug>_<YYYYmmdd-HHMMSS>.{json,csv}`, dengan:
-- `<slug>` = path repo dengan `/` diganti `_` kalau cuma 1 repo, misalnya `my-group_my-app`,
-- `<slug>` = `bulk-<N>repos` kalau lebih dari 1 repo.
+`branch-committers_<slug>_<YYYYmmdd-HHMMSS>.{json,csv}`, where:
+- `<slug>` = the repo path with `/` replaced by `_` when there is one repo, e.g. `my-group_my-app`,
+- `<slug>` = `bulk-<N>repos` when there are several repos.
 
-### Exit code
+### Exit codes
 
-| Kode | Arti |
+| Code | Meaning |
 |---|---|
-| `0` | Semua repo sukses |
-| `3` | Sebagian repo gagal (report tetap ditulis, repo yang gagal punya field `error`) |
-| `1` | Semua repo gagal, input salah, atau belum ada profile |
-| `130` | Dibatalkan dengan Ctrl+C |
+| `0` | Every repo succeeded |
+| `3` | Some repos failed (the report is still written; failed repos have an `error` field) |
+| `1` | Every repo failed, bad input, or no profile configured |
+| `130` | Cancelled with Ctrl+C |
 
-### Contoh
+### Examples
 
 ```bash
-# 1 repo, semua history, JSON ke reports/
+# one repo, full history, JSON into reports/
 ./gitlabbox.sh branches -r my-group/my-app
 
-# beberapa repo sekaligus
+# several repos at once
 ./gitlabbox.sh branches -r "team/api, team/web" -r https://gitlab.com/acme/mobile-app
 
-# semua repo yang saya member, 90 hari, JSON + CSV
+# every repo I'm a member of, last 90 days, JSON + CSV
 ./gitlabbox.sh branches --mine -d 90 -F both
 
-# repo tim payments yang role saya minimal developer
-./gitlabbox.sh branches -a developer --repo-filter 'payments/*' -p kantor
+# payments team repos where my role is at least developer
+./gitlabbox.sh branches -a developer --repo-filter 'payments/*' -p work
 
-# 1 group, cuma branch rilis, simpan ke folder tertentu
+# one group, release branches only, saved to a specific folder
 ./gitlabbox.sh branches -g my-org/backend -b 'main,release/*' -o ~/audit/2026-10/
 
-# bulk dari file, CSV ke nama file tertentu
+# bulk from a file, CSV to a specific file name
 ./gitlabbox.sh branches -f repos.txt -F csv -o ~/audit/branches.csv
 
-# pipe ke jq: 5 branch teratas
+# pipe into jq: top 5 branches
 ./gitlabbox.sh branches -r 123 -o - | jq '.repositories[0].branches[:5] | map({name, committer_count})'
 
-# monorepo besar: tanpa batas commit, worker lebih banyak, hitung berdasarkan committer
+# big monorepo: no commit cap, more workers, count by committer
 ./gitlabbox.sh branches -r big/monorepo -m 0 -w 12 --identity committer
 ```
 
-## Melihat report tersimpan
+## Viewing saved reports
 
-Menu **📊 Lihat report tersimpan** atau `./gitlabbox.sh reports` menampilkan 15 file JSON terbaru di `reports/`. Pilih salah satu, lalu tabel per repo dan leaderboard-nya ditampilkan ulang tanpa memanggil API lagi.
+The **📊 View saved reports** menu, or `./gitlabbox.sh reports`, lists the 15 most recent JSON files in `reports/`. Pick one and its per-repo tables and leaderboard are shown again without calling the API.
 
-## Tips performa
+## Performance tips
 
-| Kondisi | Saran |
+| Situation | Suggestion |
 |---|---|
-| Banyak repo (puluhan sampai ratusan) | `-d 90` dan/atau `-b 'main,develop,release/*'` |
-| Repo dengan history panjang | Biarkan `-m 5000` (default). Branch yang kena batas ditandai `+`. |
-| Kena `429` rate limit | Turunkan `-w`, pastikan pakai token |
-| Jaringan lambat / VPN | Naikkan `GITLABBOX_TIMEOUT` |
+| Many repos (dozens to hundreds) | `-d 90` and/or `-b 'main,develop,release/*'` |
+| Repos with long histories | Keep `-m 5000` (the default). Capped branches are marked with `+`. |
+| Hitting `429` rate limits | Lower `-w` and make sure you use a token |
+| Slow network / VPN | Raise `GITLABBOX_TIMEOUT` |
 
-Estimasi jumlah request API ada di [Cara kerja → Biaya API](05-cara-kerja.md#biaya-api).
+API request estimates are in [How it works → API cost](05-how-it-works.md#api-cost).

@@ -1,20 +1,20 @@
 # shellcheck shell=bash
-# lib/ui.sh — warna, banner, menu panah, input, spinner, progress bar, box.
-# Semua output UI ke stderr, jadi stdout bisa dipakai buat pipe (misal -o -).
-# Kompatibel bash 3.2 (bawaan macOS).
+# lib/ui.sh — colors, banner, arrow-key menus, input, spinner, progress bar, box.
+# All UI output goes to stderr so stdout stays clean for piping (e.g. -o -).
+# Compatible with bash 3.2 (the macOS default).
 
 UI_TTY=0
 [ -t 0 ] && [ -t 2 ] && UI_TTY=1
 
 if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
   RST=$'\033[0m'; B=$'\033[1m'; DIM=$'\033[2m'
-  C1=$'\033[38;5;202m'   # merah-oranye
-  C2=$'\033[38;5;208m'   # oranye GitLab
-  C3=$'\033[38;5;214m'   # kuning-oranye
-  CP=$'\033[38;5;135m'   # ungu
-  CG=$'\033[38;5;42m'    # hijau
-  CR=$'\033[38;5;203m'   # merah
-  CY=$'\033[38;5;221m'   # kuning
+  C1=$'\033[38;5;202m'   # red-orange
+  C2=$'\033[38;5;208m'   # GitLab orange
+  C3=$'\033[38;5;214m'   # yellow-orange
+  CP=$'\033[38;5;135m'   # purple
+  CG=$'\033[38;5;42m'    # green
+  CR=$'\033[38;5;203m'   # red
+  CY=$'\033[38;5;221m'   # yellow
   CC=$'\033[38;5;81m'    # cyan
 else
   RST=; B=; DIM=; C1=; C2=; C3=; CP=; CG=; CR=; CY=; CC=
@@ -43,7 +43,7 @@ ui_title() {
   return 0
 }
 
-# Panjang teks yang keliatan (tanpa kode warna ANSI).
+# Visible length of a string (ignoring ANSI color codes).
 ui_vlen() {
   local s
   s=$(printf '%s' "$1" | sed "s/${UI_ESC}\[[0-9;]*m//g")
@@ -72,7 +72,7 @@ ui_banner() {
   printf '  %sGitLab toolbox · v%s · gitlab.com & self-hosted%s\n' "$DIM" "$GLB_VERSION" "$RST" >&2
 }
 
-# ui_box "Judul" "baris 1" "baris 2" ...
+# ui_box "Title" "line 1" "line 2" ...
 ui_box() {
   local title="$1" w=0 l n line
   shift
@@ -89,11 +89,11 @@ ui_box() {
   printf '  %s╰%s╯%s\n' "$DIM" "$(ui_repeat ─ $((w + 2)))" "$RST" >&2
 }
 
-# ui_select VAR "Pertanyaan" "opsi 1" "opsi 2" ...
-#   - navigasi ↑/↓ (atau j/k), Enter buat pilih, q/Esc buat batal
-#   - UI_HINTS=(...) opsional: keterangan per opsi, muncul di bawah menu
-#   - UI_SELECT_DEFAULT=N opsional: posisi kursor awal
-#   - hasil: index opsi (0-based) di VAR; return 1 kalau batal
+# ui_select VAR "Question" "option 1" "option 2" ...
+#   - navigate with ↑/↓ (or j/k), Enter to choose, q/Esc to cancel
+#   - optional UI_HINTS=(...): one description per option, shown below the menu
+#   - optional UI_SELECT_DEFAULT=N: initial cursor position
+#   - result: 0-based option index in VAR; returns 1 when cancelled
 ui_select() {
   local __var="$1" title="$2"
   shift 2
@@ -104,11 +104,11 @@ ui_select() {
   [ "$sel" -ge "$n" ] && sel=0
 
   if [ "$UI_TTY" != 1 ]; then
-    ui_err "Menu interaktif butuh terminal (TTY). Pakai mode flag, cek: gitlabbox.sh --help"
+    ui_err "Interactive menus need a terminal (TTY). Use flag mode instead, see: gitlabbox.sh --help"
     return 1
   fi
 
-  printf '  %s?%s %s%s%s %s(↑/↓ · Enter · q batal)%s\n' "$C2" "$RST" "$B" "$title" "$RST" "$DIM" "$RST" >&2
+  printf '  %s?%s %s%s%s %s(↑/↓ · Enter · q to cancel)%s\n' "$C2" "$RST" "$B" "$title" "$RST" "$DIM" "$RST" >&2
   cursor_hide
   while :; do
     for ((i = 0; i < n; i++)); do
@@ -139,7 +139,7 @@ ui_select() {
     esac
     printf '\033[%dA' $((n + hl)) >&2
   done
-  # ringkas jadi 1 baris: "✔ Pertanyaan › pilihan"
+  # collapse into one line: "✔ Question › choice"
   printf '\033[%dA\r\033[J' $((n + hl + 1)) >&2
   printf '  %s✔%s %s %s›%s %s%s%s\n' "$CG" "$RST" "$title" "$DIM" "$RST" "$CC" \
     "$(printf '%s' "${opts[$sel]}" | sed "s/${UI_ESC}\[[0-9;]*m//g")" "$RST" >&2
@@ -147,11 +147,11 @@ ui_select() {
   printf -v "$__var" '%s' "$sel"
 }
 
-# ui_confirm "Pertanyaan" [y|n]  → return 0 kalau Ya
+# ui_confirm "Question" [y|n]  → returns 0 for Yes
 ui_confirm() {
   local c
   [ "${2:-y}" = n ] && UI_SELECT_DEFAULT=1
-  ui_select c "$1" "Ya" "Tidak" || return 1
+  ui_select c "$1" "Yes" "No" || return 1
   [ "$c" = 0 ]
 }
 
@@ -165,13 +165,13 @@ ui_input() {
     path) IFS= read -re val ;;
     *) IFS= read -r val ;;
   esac
-  val="${val#"${val%%[![:space:]]*}"}"   # trim kiri
-  val="${val%"${val##*[![:space:]]}"}"   # trim kanan
+  val="${val#"${val%%[![:space:]]*}"}"   # trim left
+  val="${val%"${val##*[![:space:]]}"}"   # trim right
   [ -z "$val" ] && val="$def"
   case "$val" in "~/"*) val="$HOME/${val#\~/}" ;; esac
   disp="$val"
   if [ "$mode" = secret ] && [ -n "$val" ]; then
-    disp="${val:0:6}$(ui_repeat • 10) ${DIM}(${#val} karakter)${RST}"
+    disp="${val:0:6}$(ui_repeat • 10) ${DIM}(${#val} characters)${RST}"
   fi
   [ "$UI_TTY" = 1 ] && printf '\033[1A\r\033[2K' >&2
   printf '  %s✔%s %s %s›%s %s%s%s\n' "$CG" "$RST" "$label" "$DIM" "$RST" "$CC" "${disp:-—}" "$RST" >&2
@@ -180,14 +180,14 @@ ui_input() {
 
 ui_pause() {
   [ "$UI_TTY" = 1 ] || return 0
-  printf '\n  %s%s%s' "$DIM" "${1:-Tekan Enter buat lanjut…}" "$RST" >&2
+  printf '\n  %s%s%s' "$DIM" "${1:-Press Enter to continue…}" "$RST" >&2
   IFS= read -rs _
   printf '\n' >&2
 }
 
 # ---------- spinner ----------
-# ui_spin_start "pesan" [file_counter]  → jalan di background
-# ui_spin_stop RC "pesan akhir"
+# ui_spin_start "message" [counter_file]  → runs in the background
+# ui_spin_stop RC "final message"
 ui_spin_start() {
   UI_SPIN_MSG="$1"
   local cfile="${2:-}"
@@ -243,7 +243,7 @@ ui_progress() { # ui_progress DONE TOTAL "label"
 
 ui_progress_end() { [ "$UI_TTY" = 1 ] && printf '\r\033[2K' >&2; return 0; }
 
-# Mini bar buat tabel (lebar tetap, aman buat alignment).
+# Fixed-width mini bar for tables (keeps columns aligned).
 ui_minibar() { # ui_minibar VALUE MAX WIDTH
   local v=$1 m=$2 w=$3 f
   [ "$m" -gt 0 ] || m=1
@@ -251,7 +251,7 @@ ui_minibar() { # ui_minibar VALUE MAX WIDTH
   printf '%s%s%s%s%s' "$C2" "$(ui_repeat █ "$f")" "$DIM" "$(ui_repeat ░ $((w - f)))" "$RST"
 }
 
-ui_duration() { # detik → "1m 12s"
+ui_duration() { # seconds → "1m 12s"
   local s=$1
   if [ "$s" -ge 60 ]; then printf '%dm %ds' $((s / 60)) $((s % 60)); else printf '%ds' "$s"; fi
 }

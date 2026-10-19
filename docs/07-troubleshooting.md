@@ -1,63 +1,63 @@
 # 7. Troubleshooting
 
-[← Arsitektur & pengembangan](06-arsitektur.md) · [Keamanan →](08-keamanan.md)
+[← Architecture & development](06-architecture.md) · [Security →](08-security.md)
 
-Langkah pertama yang paling berguna:
+The most useful first steps:
 
 ```bash
-./gitlabbox.sh whoami            # token valid? scope apa? versi GitLab?
-./gitlabbox.sh profiles          # profile mana yang default?
+./gitlabbox.sh whoami            # is the token valid? which scopes? which GitLab version?
+./gitlabbox.sh profiles          # which profile is the default?
 ```
 
-## Pesan error & solusinya
+## Error messages & fixes
 
-| Pesan | Penyebab | Solusi |
+| Message | Cause | Fix |
 |---|---|---|
-| `401 Unauthorized — token kosong / salah / expired / di-revoke` | Token gak valid | Bikin token baru → menu Kelola profile → Ganti token |
-| `403 Forbidden — token kurang scope (butuh read_api) atau role-nya gak cukup` | Scope token cuma `read_repository`, atau role di project di bawah Reporter | Pakai token dengan scope `read_api`, atau minta akses Reporter+ |
-| `404 Not Found — path salah, atau project private & token gak punya akses` | Typo path, project sudah dipindah/dihapus, atau GitLab menyembunyikan project private dari user yang gak punya akses | Cek path di browser. Cek juga apakah repo-nya memang terlihat dengan akun yang sama. |
-| `Host '…' belum punya profile` | URL repo dari instance yang belum disetup | `./gitlabbox.sh setup` buat host tersebut |
-| `Host gak ketemu (DNS). Cek URL, atau perlu nyalain VPN?` | DNS gagal (curl exit 6) | Nyalakan VPN kantor atau perbaiki URL |
-| `Koneksi ditolak` | Port tertutup (curl exit 7) | Cek URL/port, firewall |
-| `Timeout` | Server lambat (curl exit 28) | `export GITLABBOX_TIMEOUT=180` |
-| `Masalah SSL/TLS (sertifikat self-signed / CA internal?)` | Sertifikat server gak dipercaya sistem | Setup ulang dengan **CA bundle custom** (`.pem` CA kantor). Pakai **skip verifikasi** cuma kalau benar-benar perlu. |
-| `Masalah SSL/TLS` padahal server pakai `http://` | Kamu nulis URL tanpa skema, jadi otomatis dianggap `https://` | Tulis `http://` secara eksplisit di wizard |
-| `Response bukan JSON — URL GitLab salah, atau ketahan SSO/proxy` | URL mengarah ke halaman HTML (login SSO, captive portal, reverse proxy) | Pastikan `<url>/api/v4/version` bisa diakses. Cek URL root GitLab-nya. |
-| `302 Redirect ke … — cek URL (http vs https / sub-path / SSO)` | Server redirect, misalnya dari http ke https atau ke halaman SSO | Pakai URL hasil redirect sebagai URL profile |
-| `429 Rate limit GitLab (disuruh nunggu Ns)` | Terlalu banyak request, biasanya karena akses **tanpa token** | Pakai token, turunkan `-w`, persempit dengan `-d` / `-b` |
-| `Mode akun butuh token` | Profile tanpa token dipakai buat `--mine` / `-a` | Tambahkan PAT ke profile |
-| `Scope 'all' di gitlab.com = semua repo publik sedunia` | `-a all` di gitlab.com | Pakai `member` |
-| `Token gak punya scope read_api/api` (warning) | Token dengan scope sempit | Bikin ulang token dengan `read_api` |
-| `Menu interaktif butuh terminal (TTY)` | Dijalankan tanpa terminal (pipe, CI, cron) | Pakai mode flag: `./gitlabbox.sh branches ...` |
-| `Butuh: jq` | `jq` belum terpasang | `brew install jq` / `apt install jq` |
+| `401 Unauthorized — token is missing / wrong / expired / revoked` | Invalid token | Create a new token → Manage profiles → Change token |
+| `403 Forbidden — token lacks scope (read_api required) or your role is too low` | The token only has `read_repository`, or your project role is below Reporter | Use a token with the `read_api` scope, or ask for Reporter+ access |
+| `404 Not Found — wrong path, or the project is private and the token has no access` | Typo in the path, the project was moved/deleted, or GitLab hides private projects from users without access | Check the path in the browser, using the same account |
+| `Host '…' has no profile yet` | The repo URL points to an instance you haven't set up | `./gitlabbox.sh setup` for that host |
+| `Host not found (DNS). Check the URL — or do you need to turn on a VPN?` | DNS lookup failed (curl exit 6) | Turn on the company VPN or fix the URL |
+| `Connection refused` | The port is closed (curl exit 7) | Check the URL/port and firewall |
+| `Timeout` | The server is slow (curl exit 28) | `export GITLABBOX_TIMEOUT=180` |
+| `SSL/TLS problem (self-signed certificate / internal CA?)` | Your system does not trust the server certificate | Re-run setup with a **custom CA bundle** (your company's CA `.pem`). Only **skip verification** if you really must. |
+| `SSL/TLS problem` even though the server uses `http://` | You typed the URL without a scheme, so `https://` was assumed | Type `http://` explicitly in the wizard |
+| `Response is not JSON — wrong GitLab URL, or blocked by SSO/proxy` | The URL leads to an HTML page (SSO login, captive portal, reverse proxy) | Make sure `<url>/api/v4/version` is reachable. Check the GitLab root URL. |
+| `302 Redirect to … — check the URL (http vs https / sub-path / SSO)` | The server redirects, e.g. from http to https or to an SSO page | Use the redirect target as the profile URL |
+| `429 GitLab rate limit (asked to wait Ns)` | Too many requests, usually from access **without a token** | Use a token, lower `-w`, narrow the scan with `-d` / `-b` |
+| `Account mode needs a token` | A profile without a token was used for `--mine` / `-a` | Add a PAT to the profile |
+| `Scope 'all' on gitlab.com means every public repo in the world` | `-a all` on gitlab.com | Use `member` |
+| `Token has no read_api/api scope` (warning) | A token with narrow scopes | Recreate the token with `read_api` |
+| `Interactive menus need a terminal (TTY)` | Run without a terminal (pipe, CI, cron) | Use flag mode: `./gitlabbox.sh branches ...` |
+| `Missing: jq` | `jq` is not installed | `brew install jq` / `apt install jq` |
 
-## Gejala lain
+## Other symptoms
 
-**Angka committer di hampir semua branch mirip dengan `main`.**
-Ini normal. Branch yang dibuat dari `main` membawa history `main`. Pakai `-d 30` / `-d 90` buat melihat aktivitas terbaru saja. Penjelasannya ada di [Cara kerja](05-cara-kerja.md#hal-yang-perlu-dipahami).
+**Almost every branch has a committer count similar to `main`.**
+That's expected. Branches created from `main` carry the history of `main`. Use `-d 30` / `-d 90` to look at recent activity only. See [How it works](05-how-it-works.md#things-to-keep-in-mind).
 
-**Ada tanda `+` di kolom COMMITS.**
-Commit di branch itu melebihi `--max-commits`. Naikkan batasnya (`-m 20000` atau `-m 0`) kalau perlu angka yang akurat untuk seluruh history.
+**There is a `+` in the COMMITS column.**
+That branch has more commits than `--max-commits`. Raise the cap (`-m 20000` or `-m 0`) if you need accurate numbers for the full history.
 
-**Satu orang terhitung dua kali.**
-Orang itu commit pakai dua email berbeda. Pengelompokan sengaja cuma pakai email.
+**One person is counted twice.**
+They committed with two different emails. Grouping deliberately uses the email only.
 
-**Scan lama sekali.**
-Hitung estimasinya di [Biaya API](05-cara-kerja.md#biaya-api). Biasanya penyebabnya repo dengan ratusan branch dan history panjang. Persempit dengan `-b`, `-d`, atau `--repo-filter`.
+**The scan is very slow.**
+Work out the estimate in [API cost](05-how-it-works.md#api-cost). The usual cause is repos with hundreds of branches and long histories. Narrow it down with `-b`, `-d`, or `--repo-filter`.
 
-**Mode akun cuma menemukan sedikit project.**
-- Pakai Project/Group Access Token? Token jenis itu cuma melihat project/group-nya sendiri. Pakai PAT.
-- Project archived dilewati secara default. Tambahkan `--include-archived`.
-- Scope `owned` cuma mencakup project yang kamu owner. Coba `member`.
+**Account mode only finds a few projects.**
+- Using a Project/Group Access Token? Those only see their own project/group. Use a PAT.
+- Archived projects are skipped by default. Add `--include-archived`.
+- The `owned` scope only covers projects you own. Try `member`.
 
-**Warna atau karakter kotak berantakan.**
-Pastikan terminal memakai locale UTF-8 (`echo $LANG` → `en_US.UTF-8` atau sejenisnya). Kalau perlu, matikan warna dengan `NO_COLOR=1`.
+**Colors or box characters look broken.**
+Make sure your terminal uses a UTF-8 locale (`echo $LANG` → `en_US.UTF-8` or similar). If needed, disable colors with `NO_COLOR=1`.
 
-**Tombol panah gak merespons.**
-Beberapa terminal mengirim kode panah dalam mode berbeda. Pakai `j`/`k` atau angka `1`–`9` sebagai alternatif.
+**Arrow keys don't respond.**
+Some terminals send arrow keys in a different mode. Use `j`/`k` or the number keys `1`–`9` instead.
 
-**SSH ke GitHub/GitLab timeout di port 22 (waktu clone repo ini).**
-Jaringannya memblok port 22. Pakai SSH lewat port 443. Untuk GitHub tambahkan ini ke `~/.ssh/config`:
+**SSH to GitHub/GitLab times out on port 22 (when cloning this repo).**
+Your network blocks port 22. Use SSH over port 443. For GitHub, add this to `~/.ssh/config`:
 
 ```
 Host github.com
@@ -66,11 +66,11 @@ Host github.com
   User git
 ```
 
-Fingerprint resmi GitHub buat ED25519: `SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU`.
+GitHub's official ED25519 fingerprint: `SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU`.
 
-## Debug manual
+## Manual debugging
 
-Request yang sama bisa dicoba langsung dengan `curl`. Kalau ini berhasil tapi GITLABBOX gagal, berarti ada bug di tool:
+Try the same requests directly with `curl`. If these work but GITLABBOX fails, it's a bug in the tool:
 
 ```bash
 curl -sS -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "https://gitlab.example.com/api/v4/user" | jq .

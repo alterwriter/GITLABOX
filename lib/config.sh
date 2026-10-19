@@ -1,22 +1,22 @@
 # shellcheck shell=bash
-# lib/config.sh — profile koneksi GitLab.
+# lib/config.sh — GitLab connection profiles.
 #
-# Disimpan di ~/.gitlabbox/config.json (folder 700, file 600). Satu profile =
-# satu instance GitLab (gitlab.com / self-hosted / dedicated) + cara auth-nya.
+# Stored in ~/.gitlabbox/config.json (folder 700, file 600). One profile =
+# one GitLab instance (gitlab.com / self-hosted / dedicated) + how to authenticate.
 #
-# Contoh isi:
+# Example:
 # {
-#   "default": "kantor",
+#   "default": "work",
 #   "profiles": {
-#     "kantor": { "url": "https://gitlab.example.com", "kind": "self-hosted",
+#     "work": { "url": "https://gitlab.example.com", "kind": "self-hosted",
 #                 "auth": "pat", "token": "glpat-xxx", "token_env": "",
 #                 "verify_ssl": true, "ca_bundle": "" }
 #   }
 # }
 #
-# Urutan token: env var di token_env → token tersimpan → $GITLAB_TOKEN → tanpa token.
-# Tanpa config sama sekali (misal di CI): GITLAB_URL / CI_SERVER_URL + GITLAB_TOKEN
-# otomatis jadi profile "env".
+# Token order: env var named in token_env → stored token → $GITLAB_TOKEN → no token.
+# With no config at all (e.g. in CI): GITLAB_URL / CI_SERVER_URL + GITLAB_TOKEN
+# automatically become the "env" profile.
 
 GLB_HOME="${GITLABBOX_HOME:-$HOME/.gitlabbox}"
 GLB_CONFIG="$GLB_HOME/config.json"
@@ -28,14 +28,14 @@ cfg_init() {
   fi
 }
 
-# cfg_jq FILTER [jq args...] — baca config
+# cfg_jq FILTER [jq args...] — read the config
 cfg_jq() {
   local f="$1"; shift
   [ -f "$GLB_CONFIG" ] || { jq -nr "$@" "{\"default\":null,\"profiles\":{}} | $f"; return; }
   jq -r "$@" "$f" "$GLB_CONFIG"
 }
 
-# cfg_write FILTER [jq args...] — ubah config secara atomic
+# cfg_write FILTER [jq args...] — modify the config atomically
 cfg_write() {
   local f="$1" tmp; shift
   cfg_init
@@ -69,7 +69,7 @@ url_path() { # https://host/gitlab → /gitlab
   case "$r" in */*) printf '/%s' "${r#*/}" ;; *) printf '' ;; esac
 }
 
-# Profile aktif: argumen → default config → satu-satunya profile → "env"
+# Active profile: argument → config default → the only profile → "env"
 cfg_resolve_name() {
   local want="$1" d c
   if [ -n "$want" ]; then printf '%s' "$want"; return; fi
@@ -90,7 +90,7 @@ cfg_find_by_host() {
 }
 
 # cfg_save_profile NAME URL KIND AUTH TOKEN TOKEN_ENV VERIFY(true/false) CA_BUNDLE MAKE_DEFAULT(1/0)
-# Token dioper lewat env (bukan argv) biar gak keliatan di `ps`.
+# The token is passed via env (not argv) so it never shows up in `ps`.
 cfg_save_profile() {
   GLB_NEW_TOKEN="$5" cfg_write '
     .profiles[$n] = {
@@ -109,9 +109,9 @@ cfg_delete_profile() {
 
 cfg_set_default() { cfg_write '.default = $n' --arg n "$1"; }
 
-# ---------- aktivasi profile ----------
+# ---------- profile activation ----------
 # use_profile_values NAME URL AUTH TOKEN VERIFY CA
-#   set + export variabel GLB_* yang dipakai lib/api.sh (juga oleh worker paralel).
+#   sets + exports the GLB_* variables used by lib/api.sh (and by parallel workers).
 use_profile_values() {
   local name="$1" url="$2" auth="$3" token="$4" verify="$5" ca="$6"
   GLB_PROFILE="$name"
@@ -144,7 +144,7 @@ use_profile() {
     url="${GITLAB_URL:-${CI_SERVER_URL:-}}"
     [ -n "$url" ] || return 1
     GLB_TOKEN_SOURCE="env \$GITLAB_TOKEN"
-    [ -n "${GITLAB_TOKEN:-}" ] || GLB_TOKEN_SOURCE="tanpa token"
+    [ -n "${GITLAB_TOKEN:-}" ] || GLB_TOKEN_SOURCE="no token"
     verify=true; [ "${GITLAB_INSECURE:-0}" = 1 ] && verify=false
     use_profile_values env "$url" "${GITLAB_AUTH:-pat}" "${GITLAB_TOKEN:-}" "$verify" "${GITLAB_CA_BUNDLE:-}"
     return 0
@@ -158,17 +158,17 @@ use_profile() {
   if [ -n "$tenv" ] && [ -n "$(printenv "$tenv" 2>/dev/null)" ]; then
     token=$(printenv "$tenv"); GLB_TOKEN_SOURCE="env \$$tenv"
   elif [ -n "$(cfg_field "$name" token)" ]; then
-    token=$(cfg_field "$name" token); GLB_TOKEN_SOURCE="tersimpan di config"
+    token=$(cfg_field "$name" token); GLB_TOKEN_SOURCE="stored in config"
   elif [ -n "${GITLAB_TOKEN:-}" ]; then
     token="$GITLAB_TOKEN"; GLB_TOKEN_SOURCE="env \$GITLAB_TOKEN"
   else
-    token=""; GLB_TOKEN_SOURCE="tanpa token (public only)"
-    [ -n "$tenv" ] && GLB_TOKEN_SOURCE="env \$$tenv KOSONG → tanpa token"
+    token=""; GLB_TOKEN_SOURCE="no token (public only)"
+    [ -n "$tenv" ] && GLB_TOKEN_SOURCE="env \$$tenv is EMPTY → no token"
   fi
   use_profile_values "$name" "$url" "${auth:-pat}" "$token" "${verify:-true}" "$ca"
 }
 
-# Label ringkas buat ditampilin: "kantor · gitlab.example.com"
+# Short display label: "work · gitlab.example.com"
 profile_label() {
   local p="$1" u
   if [ "$p" = env ] && ! cfg_exists env; then u="${GITLAB_URL:-${CI_SERVER_URL:-}}"; else u=$(cfg_field "$p" url); fi

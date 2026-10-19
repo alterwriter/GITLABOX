@@ -1,11 +1,11 @@
 # shellcheck shell=bash
-# lib/api.sh — wrapper curl ke GitLab REST API v4.
-#   - auth lewat header file (token gak pernah nongol di argv / `ps`)
-#   - retry otomatis buat 429 (rate limit, hormati Retry-After) & 5xx
-#   - pagination ngikutin header x-next-page
-#   - pesan error dibikin manusiawi (SSL, DNS, 401, 403, 404, dst)
+# lib/api.sh — curl wrapper for the GitLab REST API v4.
+#   - auth via a header file (the token never appears in argv / `ps`)
+#   - automatic retry on 429 (rate limit, honors Retry-After) and 5xx
+#   - pagination follows the x-next-page header
+#   - human-friendly error messages (SSL, DNS, 401, 403, 404, ...)
 #
-# Variabel hasil: API_STATUS, API_ERROR, API_NEXT_PAGE, API_TRUNCATED, API_COUNT
+# Result variables: API_STATUS, API_ERROR, API_NEXT_PAGE, API_TRUNCATED, API_COUNT
 
 API_STATUS=; API_ERROR=; API_NEXT_PAGE=; API_TRUNCATED=0; API_COUNT=0
 
@@ -20,7 +20,7 @@ _api_curl() { # _api_curl URL BODY HEADERS
   curl "${args[@]}" -D "$3" -o "$2" -w '%{http_code}' "$1"
 }
 
-_api_header() { # _api_header FILE NAME → value (header terakhir yang match)
+_api_header() { # _api_header FILE NAME → value (last matching header)
   tr -d '\r' <"$1" 2>/dev/null | awk -v k="$2" '
     BEGIN { k = tolower(k) ":" }
     index(tolower($0), k) == 1 { v = substr($0, length(k) + 1); sub(/^[ \t]+/, "", v) }
@@ -29,11 +29,11 @@ _api_header() { # _api_header FILE NAME → value (header terakhir yang match)
 
 _api_curl_hint() { # _api_curl_hint EXIT_CODE
   case "$1" in
-    6) printf 'Host gak ketemu (DNS). Cek URL, atau perlu nyalain VPN?' ;;
-    7) printf 'Koneksi ditolak — server/port gak bisa diakses.' ;;
-    28) printf 'Timeout — server lama banget responnya.' ;;
+    6) printf 'Host not found (DNS). Check the URL — or do you need to turn on a VPN?' ;;
+    7) printf 'Connection refused — the server/port is not reachable.' ;;
+    28) printf 'Timeout — the server took too long to respond.' ;;
     35 | 51 | 53 | 54 | 58 | 59 | 60 | 66 | 77 | 83 | 90 | 91)
-      printf 'Masalah SSL/TLS (sertifikat self-signed / CA internal?). Set CA bundle atau skip verify di setup.' ;;
+      printf 'SSL/TLS problem (self-signed certificate / internal CA?). Set a CA bundle or skip verification in setup.' ;;
     *) printf 'curl error %s' "$1" ;;
   esac
 }
@@ -42,21 +42,21 @@ _api_http_hint() { # _api_http_hint CODE HEADERS BODY
   local code="$1" msg loc
   msg=$(jq -r 'if type == "object" then (.message // .error_description // .error // empty) | tostring else empty end' "$3" 2>/dev/null | head -c 200)
   case "$code" in
-    401) printf '401 Unauthorized — token kosong / salah / expired / di-revoke.' ;;
-    403) printf '403 Forbidden — token kurang scope (butuh read_api) atau role-nya gak cukup.' ;;
-    404) printf '404 Not Found — path salah, atau project private & token gak punya akses.' ;;
+    401) printf '401 Unauthorized — token is missing / wrong / expired / revoked.' ;;
+    403) printf '403 Forbidden — token lacks scope (read_api required) or your role is too low.' ;;
+    404) printf '404 Not Found — wrong path, or the project is private and the token has no access.' ;;
     3??)
       loc=$(_api_header "$2" location)
-      printf '%s Redirect ke %s — cek URL (http vs https / sub-path / SSO).' "$code" "${loc:-?}" ;;
-    429) printf '429 Rate limit terus — coba kurangin --workers.' ;;
-    5??) printf '%s Server error dari GitLab.' "$code" ;;
+      printf '%s Redirect to %s — check the URL (http vs https / sub-path / SSO).' "$code" "${loc:-?}" ;;
+    429) printf '429 Rate limited repeatedly — try lowering --workers.' ;;
+    5??) printf '%s Server error from GitLab.' "$code" ;;
     *) printf 'HTTP %s' "$code" ;;
   esac
   [ -n "$msg" ] && printf ' [%s]' "$msg"
   return 0
 }
 
-# api_get PATH OUT_BODY → return 0 kalau 2xx + JSON valid
+# api_get PATH OUT_BODY → returns 0 on 2xx + valid JSON
 api_get() {
   local path="$1" body="$2" hdrs="$2.hdr" errf="$2.err" attempt=0 code rc wait
   API_ERROR=; API_NEXT_PAGE=
@@ -75,7 +75,7 @@ api_get() {
     case "$code" in
       2??)
         if ! jq -e 'type' "$body" >/dev/null 2>&1; then
-          API_ERROR="Response bukan JSON — URL GitLab salah, atau ketahan SSO/proxy."
+          API_ERROR="Response is not JSON — wrong GitLab URL, or blocked by SSO/proxy."
           return 1
         fi
         API_NEXT_PAGE=$(_api_header "$hdrs" x-next-page)
@@ -85,8 +85,8 @@ api_get() {
         wait=$(_api_header "$hdrs" retry-after)
         case "$wait" in '' | *[!0-9]*) wait=$((attempt * 2)) ;; esac
         if [ "$code" = 429 ] && [ "$wait" -gt 90 ]; then
-          # gak usah nunggu puluhan menit diem-diem — kasih tau aja
-          API_ERROR="429 Rate limit GitLab (disuruh nunggu ${wait}s). Pakai token (limit anonim jauh lebih kecil) atau kurangin --workers."
+          # don't silently wait tens of minutes — just say so
+          API_ERROR="429 GitLab rate limit (asked to wait ${wait}s). Use a token (anonymous limits are much lower) or lower --workers."
           return 1
         fi
         if [ "$attempt" -lt 6 ]; then
@@ -101,8 +101,8 @@ api_get() {
 }
 
 # api_get_all PATH OUT_FILE [MAX_ITEMS] [COUNTER_FILE]
-#   gabungin semua halaman jadi 1 array JSON. MAX_ITEMS=0 → tanpa batas.
-#   API_TRUNCATED=1 kalau berhenti gara-gara MAX_ITEMS padahal masih ada data.
+#   merges all pages into one JSON array. MAX_ITEMS=0 → no limit.
+#   API_TRUNCATED=1 when it stopped because of MAX_ITEMS while more data exists.
 api_get_all() {
   local path="$1" out="$2" max="${3:-0}" cfile="${4:-}" page=1 sep='?' dir="$2.pages" pf n total=0
   case "$path" in *\?*) sep='&' ;; esac
@@ -119,7 +119,7 @@ api_get_all() {
       break
     fi
     if [ -z "$API_NEXT_PAGE" ]; then
-      # fallback kalau proxy ngebuang header pagination
+      # fallback in case a proxy strips the pagination headers
       if [ "$n" -eq 100 ] && ! grep -qi '^x-next-page:' "$pf.hdr"; then
         page=$((page + 1)); continue
       fi
@@ -135,30 +135,30 @@ api_get_all() {
   return 0
 }
 
-# glb_check_connection → print detail koneksi, return 1 kalau gagal
+# glb_check_connection → prints connection details, returns 1 on failure
 glb_check_connection() {
   local f="$GLB_TMP/check" lines=() ok=0 user ver tinfo scopes exp_days
   if [ -n "$GLB_HDR" ]; then
-    ui_spin_start "Ngetes koneksi ke $GLB_HOST"
+    ui_spin_start "Testing connection to $GLB_HOST"
     if api_get "/user" "$f.user"; then
       user=$(jq -r '"@\(.username) (\(.name))" + (if .is_admin then " · admin" else "" end)' "$f.user")
       api_get "/version" "$f.ver" && ver=$(jq -r '.version' "$f.ver")
       if api_get "/personal_access_tokens/self" "$f.tok"; then
-        tinfo=$(jq -r '"\(.name) · scope: \(.scopes | join(", ")) · expire: \(.expires_at // "gak pernah")"' "$f.tok")
+        tinfo=$(jq -r '"\(.name) · scopes: \(.scopes | join(", ")) · expires: \(.expires_at // "never")"' "$f.tok")
         scopes=$(jq -r '.scopes | join(" ")' "$f.tok")
         exp_days=$(jq -r 'if .expires_at then (((.expires_at + "T00:00:00Z") | fromdateiso8601) - now) / 86400 | floor else 9999 end' "$f.tok")
       fi
-      ui_spin_stop 0 "Konek ke $GLB_URL"
+      ui_spin_stop 0 "Connected to $GLB_URL"
     else
-      ui_spin_stop 1 "Gagal konek: $API_ERROR"
+      ui_spin_stop 1 "Connection failed: $API_ERROR"
       ok=1
     fi
   else
-    ui_spin_start "Ngetes akses publik ke $GLB_HOST"
+    ui_spin_start "Testing public access to $GLB_HOST"
     if api_get "/projects?per_page=1&visibility=public&simple=true" "$f.pub"; then
-      ui_spin_stop 0 "API publik bisa diakses (tanpa token)"
+      ui_spin_stop 0 "Public API is reachable (no token)"
     else
-      ui_spin_stop 1 "Gagal: $API_ERROR"
+      ui_spin_stop 1 "Failed: $API_ERROR"
       ok=1
     fi
   fi
@@ -166,22 +166,22 @@ glb_check_connection() {
 
   lines+=("${DIM}Profile ${RST} $GLB_PROFILE")
   lines+=("${DIM}URL     ${RST} $GLB_URL")
-  [ -n "${ver:-}" ] && lines+=("${DIM}Versi   ${RST} GitLab $ver")
-  if [ -n "${user:-}" ]; then lines+=("${DIM}Login   ${RST} ${CG}$user${RST}"); else lines+=("${DIM}Login   ${RST} ${CY}anonim (public only)${RST}"); fi
+  [ -n "${ver:-}" ] && lines+=("${DIM}Version ${RST} GitLab $ver")
+  if [ -n "${user:-}" ]; then lines+=("${DIM}User    ${RST} ${CG}$user${RST}"); else lines+=("${DIM}User    ${RST} ${CY}anonymous (public only)${RST}"); fi
   lines+=("${DIM}Token   ${RST} ${GLB_TOKEN_SOURCE:-—}")
   [ -n "${tinfo:-}" ] && lines+=("${DIM}        ${RST} $tinfo")
-  [ "$GLB_INSECURE" = 1 ] && lines+=("${DIM}SSL     ${RST} ${CY}verifikasi dimatiin (insecure)${RST}")
+  [ "$GLB_INSECURE" = 1 ] && lines+=("${DIM}SSL     ${RST} ${CY}verification disabled (insecure)${RST}")
   [ -n "$GLB_CACERT" ] && lines+=("${DIM}SSL     ${RST} CA bundle: $GLB_CACERT")
-  ui_box "Koneksi OK" "${lines[@]}"
+  ui_box "Connection OK" "${lines[@]}"
 
   if [ -n "${scopes:-}" ]; then
     case " $scopes " in
       *" api "* | *" read_api "*) ;;
-      *) ui_warn "Token gak punya scope read_api/api — endpoint branch & commit bakal 403." ;;
+      *) ui_warn "Token has no read_api/api scope — branch & commit endpoints will return 403." ;;
     esac
   fi
   if [ -n "${exp_days:-}" ] && [ "$exp_days" -lt 14 ]; then
-    ui_warn "Token expire dalam $exp_days hari lagi."
+    ui_warn "Token expires in $exp_days days."
   fi
   return 0
 }

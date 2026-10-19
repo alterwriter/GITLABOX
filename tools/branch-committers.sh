@@ -1,14 +1,15 @@
 # shellcheck shell=bash
-# tools/branch-committers.sh — list branch per repo + jumlah committer unik,
-# diurutin dari committer terbanyak ke paling sedikit. Export JSON / CSV.
+# tools/branch-committers.sh — list branches per repo + unique committer count,
+# sorted from most committers to fewest. Exports JSON / CSV.
 #
-# API GitLab yang dipakai (semua read-only, scope read_api):
+# GitLab APIs used (all read-only, scope read_api):
 #   GET /projects/:id                                   resolve path → ID
-#   GET /groups/:id/projects?include_subgroups=true     kalau input group:...
-#   GET /projects/:id/repository/branches               daftar branch
-#   GET /projects/:id/repository/commits?ref_name=BR    commit per branch
-#                                                       (opsional &since=ISO8601)
-# Committer unik = dihitung dari email (lowercase) author/committer tiap commit.
+#   GET /groups/:id/projects?include_subgroups=true     for group:... input
+#   GET /projects                                       for account:... input
+#   GET /projects/:id/repository/branches               list branches
+#   GET /projects/:id/repository/commits?ref_name=BR    commits per branch
+#                                                       (optional &since=ISO8601)
+# Unique committers = counted by (lowercased) author/committer email of each commit.
 
 TOOL_BC_NAME="Branch & Committer Report"
 
@@ -31,7 +32,7 @@ bc_defaults() {
 BC_JQ_KEY='def ckey: ((.email // "") | ascii_downcase) as $e
   | if $e == "" then "name:" + ((.name // "") | ascii_downcase) else $e end;'
 
-# Hasil per branch (dijalanin worker). Input: branches.json, --slurpfile c commits.
+# Per-branch result (run by the worker). Input: branches.json, --slurpfile c commits.
 BC_JQ_BRANCH="$BC_JQ_KEY"'
 def who: if $ident == "committer"
   then {name: (.committer_name // ""), email: (.committer_email // "")}
@@ -66,31 +67,31 @@ _bc_tilde() { case "$1" in "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;; *) printf
 bc_prepare_profile() {
   BC_PROFILE=$(cfg_resolve_name "$BC_PROFILE")
   if [ -z "$BC_PROFILE" ]; then
-    ui_err "Belum ada profile GitLab. Jalanin: ./gitlabbox.sh setup"
-    ui_hint "Atau buat CI: export GITLAB_URL=https://gitlab.example.com GITLAB_TOKEN=glpat-xxx"
+    ui_err "No GitLab profile yet. Run: ./gitlabbox.sh setup"
+    ui_hint "Or for CI: export GITLAB_URL=https://gitlab.example.com GITLAB_TOKEN=glpat-xxx"
     return 1
   fi
   if ! use_profile "$BC_PROFILE"; then
-    ui_err "Profile '$BC_PROFILE' gak ketemu. Cek: ./gitlabbox.sh profiles"
+    ui_err "Profile '$BC_PROFILE' not found. Check: ./gitlabbox.sh profiles"
     return 1
   fi
   BC_BASE_HOST="$GLB_HOST"
 }
 
-bc_bind_profile() { # bc_bind_profile HOST → aktifin profile yang cocok
+bc_bind_profile() { # bc_bind_profile HOST → activate the matching profile
   local host="$1" p="$BC_PROFILE"
   BC_BIND_ERR=
   if [ -n "$host" ] && [ "$host" != "$BC_BASE_HOST" ]; then
     if ! p=$(cfg_find_by_host "$host"); then
-      BC_BIND_ERR="Host '$host' belum punya profile — tambahin via ./gitlabbox.sh setup"
+      BC_BIND_ERR="Host '$host' has no profile yet — add one via ./gitlabbox.sh setup"
       return 1
     fi
   fi
   [ "$GLB_PROFILE" = "$p" ] && return 0
-  use_profile "$p" || { BC_BIND_ERR="Profile '$p' gak valid"; return 1; }
+  use_profile "$p" || { BC_BIND_ERR="Profile '$p' is invalid"; return 1; }
 }
 
-_bc_strip_prefix() { # URL self-hosted di sub-path (https://host/gitlab/...)
+_bc_strip_prefix() { # self-hosted URL under a sub-path (https://host/gitlab/...)
   local p="$1" pre="${GLB_URL_PATH#/}"
   if [ -n "$pre" ] && [ -n "$2" ]; then
     case "$p" in "$pre"/*) p="${p#"$pre"/}" ;; esac
@@ -98,7 +99,7 @@ _bc_strip_prefix() { # URL self-hosted di sub-path (https://host/gitlab/...)
   printf '%s' "$p"
 }
 
-# ---------- expand target (group → project) ----------
+# ---------- target expansion (group/account → projects) ----------
 _bc_add() { # _bc_add HOST PATH ERR
   local key="$1|$2"
   [ "$1" = "$BC_BASE_HOST" ] && key="|$2"   # gitlab.com/a/b == a/b
@@ -107,7 +108,7 @@ _bc_add() { # _bc_add HOST PATH ERR
   BC_T_HOST+=("$1"); BC_T_PATH+=("$2"); BC_T_ERR+=("$3")
 }
 
-# stdin: baris teks → print yang match salah satu glob (pisah koma). Pola kosong = semua.
+# stdin: text lines → prints those matching any glob (comma-separated). Empty pattern = all.
 _bc_glob_lines() {
   local pats=() pat line
   while IFS= read -r pat; do
@@ -123,7 +124,7 @@ _bc_glob_lines() {
   done
 }
 
-# Scope akun → query /projects
+# Account scope → /projects query
 BC_ACCOUNT_SCOPES="member owned reporter developer maintainer all"
 _bc_account_query() {
   case "$1" in
@@ -138,18 +139,18 @@ _bc_account_query() {
 }
 
 # bc_fetch_projects group|account ARG OUT_TXT
-#   ambil daftar project (pakai profile aktif) → 1 path_with_namespace per baris,
-#   udah difilter BC_REPO_FILTER. Set BC_LIST_TOTAL (sebelum filter) & BC_ACCOUNT_USER.
+#   fetches the project list (using the active profile) → one path_with_namespace per line,
+#   already filtered by BC_REPO_FILTER. Sets BC_LIST_TOTAL (before filtering) & BC_ACCOUNT_USER.
 bc_fetch_projects() {
   local kind="$1" arg="$2" out="$3" raw="$3.raw" path q arch="&archived=false"
   [ "$BC_INCLUDE_ARCHIVED" = 1 ] && arch=""
   if [ "$kind" = group ]; then
     path="/groups/$(_uri "$arg")/projects?include_subgroups=true&simple=true&order_by=path&sort=asc$arch"
   else
-    if [ -z "$GLB_HDR" ]; then API_ERROR="Mode akun butuh token — tanpa token gak ada 'akun' yang bisa dicek."; return 1; fi
-    if ! q=$(_bc_account_query "$arg"); then API_ERROR="Scope '$arg' gak dikenal. Pilihan: $BC_ACCOUNT_SCOPES"; return 1; fi
+    if [ -z "$GLB_HDR" ]; then API_ERROR="Account mode needs a token — without one there is no 'account' to look up."; return 1; fi
+    if ! q=$(_bc_account_query "$arg"); then API_ERROR="Unknown scope '$arg'. Choices: $BC_ACCOUNT_SCOPES"; return 1; fi
     if [ "$arg" = all ] && [ "$GLB_HOST" = gitlab.com ]; then
-      API_ERROR="Scope 'all' di gitlab.com = semua repo publik sedunia. Pakai 'member'."; return 1
+      API_ERROR="Scope 'all' on gitlab.com means every public repo in the world. Use 'member'."; return 1
     fi
     api_get "/user" "$raw.user" || return 1
     BC_ACCOUNT_USER=$(jq -r '"@" + .username' "$raw.user")
@@ -166,7 +167,7 @@ bc_expand_targets() {
   local t arg label n p list="$BC_WORK/list.txt"
   BC_T_HOST=(); BC_T_PATH=(); BC_T_ERR=(); BC_SEEN="|"
   for t in "${BC_TARGETS[@]}"; do
-    if ! parse_target "$t"; then ui_warn "Skip, input gak valid: $t"; continue; fi
+    if ! parse_target "$t"; then ui_warn "Skipped, invalid input: $t"; continue; fi
     [ "$T_KIND" = project ] && { _bc_add "$T_HOST" "$T_PATH" ""; continue; }
     case "$BC_SEEN" in *"|@$T_KIND:$T_PATH@${T_HOST:-$BC_BASE_HOST}|"*) continue ;; esac
     BC_SEEN="$BC_SEEN@$T_KIND:$T_PATH@${T_HOST:-$BC_BASE_HOST}|"
@@ -176,16 +177,16 @@ bc_expand_targets() {
     if [ "$T_KIND" = group ]; then
       arg=$(_bc_strip_prefix "$T_PATH" "$T_HOST"); label="group ${B}$arg${RST}"
     else
-      arg="$T_PATH"; label="project yang bisa diakses akun lu ${DIM}(scope: $arg · $GLB_HOST)${RST}"
+      arg="$T_PATH"; label="projects your account can access ${DIM}(scope: $arg · $GLB_HOST)${RST}"
     fi
-    ui_spin_start "Nyari semua $label" "$BC_WORK/list.count"
+    ui_spin_start "Looking up all $label" "$BC_WORK/list.count"
     if bc_fetch_projects "$T_KIND" "$arg" "$list"; then
       n=$(sed -n '$=' "$list"); n=${n:-0}
-      [ "$T_KIND" = account ] && label="Akun ${B}$BC_ACCOUNT_USER${RST} ${DIM}(scope: $arg · $GLB_HOST)${RST}"
+      [ "$T_KIND" = account ] && label="Account ${B}$BC_ACCOUNT_USER${RST} ${DIM}(scope: $arg · $GLB_HOST)${RST}"
       if [ -n "$BC_REPO_FILTER" ]; then
-        ui_spin_stop 0 "$label: $BC_LIST_TOTAL project → ${B}$n${RST} cocok filter ${CC}$BC_REPO_FILTER${RST}"
+        ui_spin_stop 0 "$label: $BC_LIST_TOTAL projects → ${B}$n${RST} match filter ${CC}$BC_REPO_FILTER${RST}"
       else
-        ui_spin_stop 0 "$label: ${B}$n${RST} project"
+        ui_spin_stop 0 "$label: ${B}$n${RST} projects"
       fi
       while IFS= read -r p; do _bc_add "$T_HOST" "$p" ""; done <"$list"
     else
@@ -196,7 +197,7 @@ bc_expand_targets() {
   done
 }
 
-# ---------- worker (1 proses per branch, jalan paralel via xargs -P) ----------
+# ---------- worker (one process per branch, run in parallel via xargs -P) ----------
 bc_worker() {
   local i="$1" name path out cf
   out="$BC_RDIR/b/$(printf '%05d' "$i").json"
@@ -216,7 +217,7 @@ bc_worker() {
   printf '%s\n' "$i" >>"$BC_RDIR/done"
 }
 
-# ---------- scan 1 repo ----------
+# ---------- scan one repo ----------
 _bc_repo_error() { # FILE INPUT ERR
   jq -n --arg in "$2" --arg e "$3" --arg gl "${GLB_URL:-}" \
     '{input: $in, project: $in, gitlab_url: $gl, branch_count_total: 0, branch_count_analyzed: 0,
@@ -237,7 +238,7 @@ bc_scan_repo() {
 
   ui_spin_start "Resolve project"
   if ! api_get "/projects/$(_uri "$path")" "$rdir/project.json"; then
-    ui_spin_stop 1 "Project gagal diakses: $API_ERROR"
+    ui_spin_stop 1 "Cannot access project: $API_ERROR"
     _bc_repo_error "$out" "$path" "$API_ERROR"; return 1
   fi
   pid=$(jq -r '.id' "$rdir/project.json")
@@ -246,9 +247,9 @@ bc_scan_repo() {
   vis=$(jq -r '.visibility // "-"' "$rdir/project.json")
   ui_spin_stop 0 "Project ${B}$pname${RST} ${DIM}· id $pid · $vis · default: $defb · $GLB_HOST${RST}"
 
-  ui_spin_start "Ngambil daftar branch" "$rdir/count"
+  ui_spin_start "Fetching branch list" "$rdir/count"
   if ! api_get_all "/projects/$pid/repository/branches" "$rdir/branches_all.json" 0 "$rdir/count"; then
-    ui_spin_stop 1 "Gagal ambil branch: $API_ERROR"
+    ui_spin_stop 1 "Failed to fetch branches: $API_ERROR"
     _bc_repo_error "$out" "$pname" "$API_ERROR"; return 1
   fi
   total=$(jq 'length' "$rdir/branches_all.json")
@@ -259,9 +260,9 @@ bc_scan_repo() {
   fi
   n=$(jq 'length' "$rdir/branches.json")
   if [ -n "$BC_FILTER" ]; then
-    ui_spin_stop 0 "$n dari $total branch cocok filter ${CC}$BC_FILTER${RST}"
+    ui_spin_stop 0 "$n of $total branches match filter ${CC}$BC_FILTER${RST}"
   else
-    ui_spin_stop 0 "$total branch ketemu"
+    ui_spin_stop 0 "$total branches found"
   fi
 
   if [ "$n" -gt 0 ]; then
@@ -273,7 +274,7 @@ bc_scan_repo() {
     BC_XARGS_PID=$xpid
     while kill -0 "$xpid" 2>/dev/null; do
       d=$(wc -l <"$rdir/done" | tr -d ' ')
-      ui_progress "$d" "$n" "ngitung committer per branch ${DIM}($BC_WORKERS worker)${RST}"
+      ui_progress "$d" "$n" "counting committers per branch ${DIM}($BC_WORKERS workers)${RST}"
       sleep 0.15
     done
     wait "$xpid"
@@ -301,22 +302,22 @@ bc_scan_repo() {
 
   nerr=$(jq '.branches_failed' "$out")
   uniq=$(jq '.unique_committers' "$out")
-  ui_ok "$n branch dianalisis · ${B}$uniq${RST} committer unik (gabungan semua branch) · $(ui_duration $((SECONDS - t0)))"
-  [ "$nerr" -gt 0 ] && ui_warn "$nerr branch gagal dibaca (detail di kolom error report)"
+  ui_ok "$n branches analyzed · ${B}$uniq${RST} unique committers (across all branches) · $(ui_duration $((SECONDS - t0)))"
+  [ "$nerr" -gt 0 ] && ui_warn "$nerr branches could not be read (see the error field in the report)"
   [ "$n" -gt 0 ] && bc_print_repo_table "$out" "$BC_ROWS"
   rm -rf "$rdir"
   return 0
 }
 
-_bc_filter_branches() { # IN OUT — filter pakai glob bash, pisah koma: "main,release/*"
+_bc_filter_branches() { # IN OUT — bash glob filter, comma-separated: "main,release/*"
   local in="$1" out="$2" keep="$BC_WORK/keep.txt"
   jq -r '.[].name' "$in" | _bc_glob_lines "$BC_FILTER" >"$keep"
   jq --rawfile k "$keep" '($k | split("\n") | map(select(. != "")) | map({(.): true}) | add // {}) as $s
     | map(select($s[.name]))' "$in" >"$out"
 }
 
-# ---------- tampilan tabel ----------
-# stdin: baris "label␟committers␟commits␟truncated␟last␟default␟protected␟merged␟top␟error"
+# ---------- table rendering ----------
+# stdin: lines "label␟committers␟commits␟truncated␟last␟default␟protected␟merged␟top␟error"
 _bc_table() { # _bc_table MAX_COMMITTERS "HEADER_LABEL" LABEL_WIDTH
   local max="$1" head="$2" lw="${3:-38}" i=0 label cc cm tr last d p m top err lbl flags
   printf '  %s%3s  %s%*s  %-19s  %8s  %-10s  %-5s  %s%s\n' "$DIM" "#" "$head" $((lw - ${#head})) "" "COMMITTERS" \
@@ -349,7 +350,7 @@ bc_print_repo_table() { # FILE ROWS
   total=$(jq '.branches | length' "$f")
   ui_nl
   jq -r --argjson n "$rows" ".branches[:\$n][] | .name as \$label | $_BC_JQ_ROW" "$f" | _bc_table "$max" "BRANCH" 38
-  [ "$total" -gt "$rows" ] && ui_hint "… +$((total - rows)) branch lagi (lengkapnya di file report)"
+  [ "$total" -gt "$rows" ] && ui_hint "… +$((total - rows)) more branches (full list in the report file)"
   return 0
 }
 
@@ -357,7 +358,7 @@ bc_print_leaderboard() { # REPORT_FILE
   local f="$1" max
   [ "$(jq '[.repositories[] | select(.error == null)] | length' "$f")" -gt 1 ] || return 0
   max=$(jq '[.repositories[].branches[].committer_count // 0] | max // 0' "$f")
-  ui_title "Top 10 branch paling rame (semua repo)"
+  ui_title "Top 10 busiest branches (all repos)"
   ui_nl
   jq -r "[.repositories[] | .project as \$p | .branches[] | select(.error == null) | . + {label: (\$p + \" › \" + .name)}]
     | sort_by(-.committer_count, -.commit_count) | .[:10][] | .label as \$label | $_BC_JQ_ROW" "$f" |
@@ -365,10 +366,10 @@ bc_print_leaderboard() { # REPORT_FILE
 }
 
 bc_legend() {
-  ui_hint "FLAGS: ${CG}D${RST}${DIM}=default  ${CY}P${RST}${DIM}=protected  ${CP}M${RST}${DIM}=merged · COMMITS '+' = kepotong batas --max-commits"
+  ui_hint "FLAGS: ${CG}D${RST}${DIM}=default  ${CY}P${RST}${DIM}=protected  ${CP}M${RST}${DIM}=merged · COMMITS '+' = capped by --max-commits"
 }
 
-# ---------- jalanin ----------
+# ---------- run ----------
 _bc_out_paths() {
   local slug ts dir=""
   ts=$(date +%Y%m%d-%H%M%S)
@@ -397,7 +398,7 @@ bc_to_csv() { # REPORT_JSON
     (.repositories[] as $r
       | if ($r.branches | length) == 0 then
           [$r.project, null, null, null, null, null, null, null, null, null, null, $r.web_url,
-           $r.gitlab_url, ($r.error // "gak ada branch yang cocok")]
+           $r.gitlab_url, ($r.error // "no matching branches")]
         else
           $r.branches[] | [$r.project, .name, .committer_count, .commit_count, .default, .protected,
             .merged, .last_commit_at, .last_commit_author, .truncated,
@@ -417,7 +418,7 @@ bc_run() {
   ui_title "Scanning" "profile: $GLB_PROFILE · $GLB_URL"
   bc_expand_targets
   BC_N=${#BC_T_PATH[@]}
-  if [ "$BC_N" -eq 0 ]; then ui_err "Gak ada repo valid buat discan."; return 1; fi
+  if [ "$BC_N" -eq 0 ]; then ui_err "No valid repos to scan."; return 1; fi
 
   for ((i = 0; i < BC_N; i++)); do
     bc_scan_repo "$i"
@@ -449,7 +450,7 @@ bc_run() {
       repositories: .
     }' >"$report"
 
-  _bc_out_paths || { ui_err "Gak bisa bikin folder output."; return 1; }
+  _bc_out_paths || { ui_err "Cannot create the output folder."; return 1; }
   if [ "$BC_OUT" = - ]; then
     if [ "$BC_FORMAT" = csv ]; then bc_to_csv "$report"; else jq . "$report"; fi
   else
@@ -463,16 +464,16 @@ bc_run() {
 
   ok=$(jq '.summary.repos_ok' "$report"); fail=$(jq '.summary.repos_failed' "$report")
   nbr=$(jq '.summary.branches_analyzed' "$report")
-  lines+=("${DIM}Repo    ${RST} ${CG}$ok sukses${RST}$([ "$fail" -gt 0 ] && printf ' · %s%s gagal%s' "$CR" "$fail" "$RST")")
-  lines+=("${DIM}Branch  ${RST} $nbr dianalisis")
-  lines+=("${DIM}Rentang ${RST} $([ -n "$BC_SINCE" ] && printf 'sejak %s (%s hari)' "${BC_SINCE:0:10}" "$BC_SINCE_DAYS" || printf 'semua history')")
-  lines+=("${DIM}Durasi  ${RST} $(ui_duration "$dur")")
+  lines+=("${DIM}Repos   ${RST} ${CG}$ok succeeded${RST}$([ "$fail" -gt 0 ] && printf ' · %s%s failed%s' "$CR" "$fail" "$RST")")
+  lines+=("${DIM}Branches${RST} $nbr analyzed")
+  lines+=("${DIM}Range   ${RST} $([ -n "$BC_SINCE" ] && printf 'since %s (%s days)' "${BC_SINCE:0:10}" "$BC_SINCE_DAYS" || printf 'full history')")
+  lines+=("${DIM}Duration${RST} $(ui_duration "$dur")")
   if [ "$BC_OUT" != - ]; then
     case "$BC_FORMAT" in json | both) lines+=("${DIM}JSON    ${RST} ${CC}${BC_OUT_JSON#"$PWD"/}${RST}") ;; esac
     case "$BC_FORMAT" in csv | both) lines+=("${DIM}CSV     ${RST} ${CC}${BC_OUT_CSV#"$PWD"/}${RST}") ;; esac
   fi
   ui_nl
-  ui_box "Report siap" "${lines[@]}"
+  ui_box "Report ready" "${lines[@]}"
   if [ "$fail" -gt 0 ]; then
     ui_nl
     jq -r '.repositories[] | select(.error != null) | "\(.project)\u001f\(.error)"' "$report" |
@@ -483,15 +484,15 @@ bc_run() {
   return "$rc"
 }
 
-# ---------- lihat report tersimpan ----------
+# ---------- view saved reports ----------
 bc_view_report() { # FILE
   local f="$1" n i
   n=$(jq '.repositories | length' "$f")
-  ui_title "$(basename "$f")" "dibuat $(jq -r '.generated_at' "$f") · $(jq -r '.summary.repos_ok' "$f") repo · $(jq -r '.summary.branches_analyzed' "$f") branch"
+  ui_title "$(basename "$f")" "generated $(jq -r '.generated_at' "$f") · $(jq -r '.summary.repos_ok' "$f") repos · $(jq -r '.summary.branches_analyzed' "$f") branches"
   for ((i = 0; i < n; i++)); do
     jq ".repositories[$i]" "$f" >"$GLB_TMP/view.json"
     printf '\n  %s[%d/%d]%s %s%s%s %s%s%s\n' "$DIM" $((i + 1)) "$n" "$RST" "$B" "$(jq -r '.project' "$GLB_TMP/view.json")" "$RST" \
-      "$DIM" "$(jq -r 'if .error then "" else "· \(.branch_count_analyzed) branch · \(.unique_committers) committer unik" end' "$GLB_TMP/view.json")" "$RST" >&2
+      "$DIM" "$(jq -r 'if .error then "" else "· \(.branch_count_analyzed) branches · \(.unique_committers) unique committers" end' "$GLB_TMP/view.json")" "$RST" >&2
     if [ "$(jq -r '.error // empty' "$GLB_TMP/view.json")" != "" ]; then
       ui_err "$(jq -r '.error' "$GLB_TMP/view.json")"
     else
@@ -506,75 +507,76 @@ bc_view_report() { # FILE
 reports_browse() {
   local files=() labels=() f k
   while IFS= read -r f; do files+=("$f"); done < <(ls -t "$GLB_ROOT"/reports/*.json 2>/dev/null | head -15)
-  if [ "${#files[@]}" -eq 0 ]; then ui_warn "Belum ada report di $GLB_ROOT/reports"; return; fi
+  if [ "${#files[@]}" -eq 0 ]; then ui_warn "No reports yet in $GLB_ROOT/reports"; return; fi
   for f in "${files[@]}"; do
-    labels+=("$(basename "$f") $DIM· $(jq -r '"\(.summary.repos_total) repo · \(.summary.branches_analyzed) branch"' "$f" 2>/dev/null)$RST")
+    labels+=("$(basename "$f") $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.branches_analyzed) branches"' "$f" 2>/dev/null)$RST")
   done
-  ui_select k "Pilih report" "${labels[@]}" || return
+  ui_select k "Choose a report" "${labels[@]}" || return
   bc_view_report "${files[$k]}"
 }
 
-# ---------- mode interaktif ----------
-_bc_preview_list() { # FILE — tampilin max 8 baris pertama
+# ---------- interactive mode ----------
+_bc_preview_list() { # FILE — show at most the first 8 lines
   local f="$1" n
   n=$(sed -n '$=' "$f"); n=${n:-0}
   head -8 "$f" | while IFS= read -r line; do ui_hint "• $line"; done
-  [ "$n" -gt 8 ] && ui_hint "… +$((n - 8)) lagi"
+  [ "$n" -gt 8 ] && ui_hint "… +$((n - 8)) more"
   return 0
 }
 
-# Pilih scope akun → ambil daftar repo → (opsional) filter → BC_TARGETS jadi daftar path.
+# Pick account scope → fetch repo list → (optional) filter → BC_TARGETS becomes a list of paths.
 _bc_pick_account() {
   local k v n scope opts=() scopes=() hints=() all cur
   if [ -z "$GLB_HDR" ]; then
-    ui_err "Profile '$GLB_PROFILE' gak pakai token — mode akun butuh token."
-    ui_hint "Tambahin token lewat menu Kelola profile → Ganti token."
+    ui_err "Profile '$GLB_PROFILE' has no token — account mode needs one."
+    ui_hint "Add a token via Manage profiles → Change token."
     return 1
   fi
-  opts+=("Semua yang gw member (rekomendasi)"); scopes+=(member)
-  hints+=("Member langsung atau lewat group — sama kayak 'Your projects' di UI GitLab")
-  opts+=("Yang gw owner aja"); scopes+=(owned)
-  hints+=("Project di namespace pribadi lu / yang lu owner")
-  opts+=("Minimal role Developer"); scopes+=(developer)
-  hints+=("Skip project yang lu cuma Guest / Reporter")
-  opts+=("Minimal role Maintainer"); scopes+=(maintainer)
-  hints+=("Project yang lu bisa manage")
+  opts+=("Everything I'm a member of (recommended)"); scopes+=(member)
+  hints+=("Direct or via a group — same as 'Your projects' in the GitLab UI")
+  opts+=("Only projects I own"); scopes+=(owned)
+  hints+=("Projects in your personal namespace / that you own")
+  opts+=("Role Developer or higher"); scopes+=(developer)
+  hints+=("Skips projects where you are only Guest / Reporter")
+  opts+=("Role Maintainer or higher"); scopes+=(maintainer)
+  hints+=("Projects you can manage")
   if [ "$GLB_HOST" != gitlab.com ]; then
-    opts+=("Semua yang visible di instance ini"); scopes+=(all)
-    hints+=("Termasuk project internal/public walau lu bukan member — bisa ribuan")
+    opts+=("Everything visible on this instance"); scopes+=(all)
+    hints+=("Includes internal/public projects you are not a member of — can be thousands")
   fi
   ui_nl
   UI_HINTS=("${hints[@]}")
-  ui_select k "Scope repo akun lu" "${opts[@]}" || return 1
+  ui_select k "Account repo scope" "${opts[@]}" || return 1
   scope="${scopes[$k]}"
   BC_INCLUDE_ARCHIVED=0
-  ui_confirm "Ikut sertain project yang di-archive?" n && BC_INCLUDE_ARCHIVED=1
+  ui_confirm "Include archived projects?" n && BC_INCLUDE_ARCHIVED=1
 
   BC_WORK="$GLB_TMP/bc"; mkdir -p "$BC_WORK"
   all="$BC_WORK/acct_all.txt"; cur="$BC_WORK/acct.txt"
   BC_REPO_FILTER=""
-  ui_spin_start "Nyari semua project yang bisa diakses akun lu" "$BC_WORK/list.count"
+  ui_spin_start "Looking up all projects your account can access" "$BC_WORK/list.count"
   if ! bc_fetch_projects account "$scope" "$all"; then
     ui_spin_stop 1 "$API_ERROR"; return 1
   fi
-  ui_spin_stop 0 "Akun ${B}$BC_ACCOUNT_USER${RST}: ${B}$BC_LIST_TOTAL${RST} project ${DIM}(scope: $scope · $GLB_HOST)${RST}"
-  if [ "$BC_LIST_TOTAL" -eq 0 ]; then ui_warn "Gak ada project di scope ini."; return 1; fi
+  ui_spin_stop 0 "Account ${B}$BC_ACCOUNT_USER${RST}: ${B}$BC_LIST_TOTAL${RST} projects ${DIM}(scope: $scope · $GLB_HOST)${RST}"
+  if [ "$BC_LIST_TOTAL" -eq 0 ]; then ui_warn "No projects in this scope."; return 1; fi
   cp "$all" "$cur"
 
   while :; do
     n=$(sed -n '$=' "$cur"); n=${n:-0}
     _bc_preview_list "$cur"
-    [ "$n" -gt 50 ] && ui_warn "$n repo itu banyak — saran: pakai rentang 90 hari / filter branch biar cepet."
-    UI_HINTS=("" "Glob pisah koma, misal: backend/*,*-service,my-team/*" "")
-    ui_select k "Lanjut?" "▶  Scan $n project ini" "🔍 Filter nama repo" "←  Batal" || return 1
+    [ "$n" -gt 50 ] && ui_warn "$n repos is a lot — tip: use a 90-day range / branch filter to speed things up."
+    UI_HINTS=("" "Comma-separated globs, e.g. backend/*,*-service,my-team/*" "")
+    ui_select k "Continue?" "▶  Scan $([ "$n" = 1 ] && printf 'this project' || printf 'these %s projects' "$n")" \
+      "🔍 Filter by repo name" "←  Cancel" || return 1
     case "$k" in
-      0) [ "$n" -gt 0 ] && break; ui_warn "0 project — ganti filter dulu." ;;
+      0) [ "$n" -gt 0 ] && break; ui_warn "0 projects — change the filter first." ;;
       1)
-        ui_input v "Filter repo (glob, kosong = semua)" "$BC_REPO_FILTER"
+        ui_input v "Repo filter (glob, empty = all)" "$BC_REPO_FILTER"
         BC_REPO_FILTER="$v"
         _bc_glob_lines "$v" <"$all" >"$cur"
         n=$(sed -n '$=' "$cur"); n=${n:-0}
-        ui_ok "$n dari $BC_LIST_TOTAL project cocok"
+        ui_ok "$n of $BC_LIST_TOTAL projects match"
         ;;
       2) return 1 ;;
     esac
@@ -582,7 +584,7 @@ _bc_pick_account() {
 
   BC_TARGETS=()
   while IFS= read -r v; do BC_TARGETS+=("$v"); done <"$cur"
-  BC_ACCOUNT_LABEL="akun $BC_ACCOUNT_USER · scope $scope · ${#BC_TARGETS[@]} project"
+  BC_ACCOUNT_LABEL="account $BC_ACCOUNT_USER · scope $scope · ${#BC_TARGETS[@]} projects"
   [ -n "$BC_REPO_FILTER" ] && BC_ACCOUNT_LABEL="$BC_ACCOUNT_LABEL (filter '$BC_REPO_FILTER')"
   return 0
 }
@@ -590,27 +592,27 @@ _bc_pick_account() {
 bc_interactive() {
   local k v line src_label win_label adv_label
   bc_defaults
-  ui_title "$TOOL_BC_NAME" "List branch per repo, urut dari committer terbanyak → paling dikit."
+  ui_title "$TOOL_BC_NAME" "List branches per repo, sorted from most committers → fewest."
   ui_nl
 
   if [ -z "$(cfg_resolve_name "")" ] && [ "$(cfg_count)" = 0 ]; then
-    ui_warn "Belum ada koneksi GitLab."
-    ui_confirm "Setup koneksi sekarang?" y || return
+    ui_warn "No GitLab connection yet."
+    ui_confirm "Set up a connection now?" y || return
     setup_wizard || return
     ui_nl
   fi
-  pick_profile "Pakai koneksi yang mana?" include_env || return
+  pick_profile "Which connection?" include_env || return
   BC_PROFILE="$PICKED_PROFILE"
   bc_prepare_profile || return
 
-  # sumber repo
-  UI_HINTS=("Ketik path (group/project), ID, atau URL — bisa beberapa, pisah koma/spasi"
-    "Auto-detect semua repo yang token lu bisa akses (member / owner / role tertentu)"
-    "File .txt, 1 repo per baris. Boleh campur URL/path/ID, '#' buat komentar"
-    "Auto-detect semua project di 1 group + subgroup-nya")
-  ui_select k "Repo-nya dari mana?" "Ketik langsung (single / beberapa)" "Semua repo yang bisa diakses akun gw" \
-    "Bulk dari file .txt" "Semua project di group" || return
-  # index 1 = mode akun; geser sisanya biar case di bawah tetep 0/1/2
+  # repo source
+  UI_HINTS=("Type a path (group/project), ID, or URL — several allowed, comma/space separated"
+    "Auto-detect every repo your token can access (member / owner / minimum role)"
+    ".txt file, one repo per line. Mix URLs/paths/IDs freely, '#' for comments"
+    "Auto-detect every project in one group + its subgroups")
+  ui_select k "Where do the repos come from?" "Type them in (single / several)" "All repos my account can access" \
+    "Bulk from a .txt file" "Every project in a group" || return
+  # index 1 = account mode; shift the rest so the case below stays 0/1/2
   if [ "$k" = 1 ]; then
     _bc_pick_account || return
     src_label="$BC_ACCOUNT_LABEL"
@@ -623,86 +625,86 @@ bc_interactive() {
       while :; do
         ui_input v "Repo" "" plain
         [ -n "$v" ] && break
-        ui_hint "contoh: my-group/my-app  atau  https://$GLB_HOST/my-group/my-app"
+        ui_hint "e.g. my-group/my-app  or  https://$GLB_HOST/my-group/my-app"
       done
       while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(split_targets "$v")
-      src_label="${#BC_TARGETS[@]} repo (manual)"
+      src_label="${#BC_TARGETS[@]} repos (manual)"
       ;;
     1)
       while :; do
-        ui_input v "Path file .txt" "$GLB_ROOT/repos.txt" path
-        if [ ! -f "$v" ]; then ui_warn "File '$v' gak ketemu. ${DIM}(Tab buat autocomplete)${RST}"; continue; fi
+        ui_input v ".txt file path" "$GLB_ROOT/repos.txt" path
+        if [ ! -f "$v" ]; then ui_warn "File '$v' not found. ${DIM}(Tab to autocomplete)${RST}"; continue; fi
         BC_TARGETS=()
         while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(read_targets_file "$v")
         [ "${#BC_TARGETS[@]}" -gt 0 ] && break
-        ui_warn "File-nya kosong (atau isinya komentar semua)."
+        ui_warn "The file is empty (or contains only comments)."
       done
-      ui_ok "${#BC_TARGETS[@]} baris kebaca:"
+      ui_ok "${#BC_TARGETS[@]} lines read:"
       printf '%s\n' "${BC_TARGETS[@]}" | head -5 | while IFS= read -r line; do ui_hint "• $line"; done
-      [ "${#BC_TARGETS[@]}" -gt 5 ] && ui_hint "… +$((${#BC_TARGETS[@]} - 5)) lagi"
-      src_label="$(basename "$v") (${#BC_TARGETS[@]} baris)"
+      [ "${#BC_TARGETS[@]}" -gt 5 ] && ui_hint "… +$((${#BC_TARGETS[@]} - 5)) more"
+      src_label="$(basename "$v") (${#BC_TARGETS[@]} lines)"
       ;;
     2)
       while :; do
-        ui_input v "Path group" "" plain
+        ui_input v "Group path" "" plain
         [ -n "$v" ] && break
       done
       parse_target "$v" && v="$T_PATH"
       BC_TARGETS=("group:$v")
-      src_label="group $v (+subgroup)"
+      src_label="group $v (+subgroups)"
       ;;
   esac
 
-  # rentang waktu
+  # time range
   ui_nl
-  UI_HINTS=("Paling akurat, tapi lama buat repo gede" "" "Rekomendasi buat audit rutin" "" "" "")
-  ui_select k "Hitung commit dari kapan?" "Semua history" "30 hari terakhir" "90 hari terakhir" \
-    "180 hari terakhir" "1 tahun terakhir" "Custom (jumlah hari)" || return
+  UI_HINTS=("Most accurate, but slow for big repos" "" "Recommended for routine audits" "" "" "")
+  ui_select k "Count commits since when?" "Full history" "Last 30 days" "Last 90 days" \
+    "Last 180 days" "Last year" "Custom (number of days)" || return
   case "$k" in
     0) BC_SINCE_DAYS=0 ;; 1) BC_SINCE_DAYS=30 ;; 2) BC_SINCE_DAYS=90 ;; 3) BC_SINCE_DAYS=180 ;; 4) BC_SINCE_DAYS=365 ;;
-    5) while :; do ui_input v "Berapa hari ke belakang" "60"; _bc_is_int "$v" && break; done; BC_SINCE_DAYS=$v ;;
+    5) while :; do ui_input v "How many days back" "60"; _bc_is_int "$v" && break; done; BC_SINCE_DAYS=$v ;;
   esac
-  win_label="semua history"; [ "$BC_SINCE_DAYS" -gt 0 ] && win_label="$BC_SINCE_DAYS hari terakhir"
+  win_label="full history"; [ "$BC_SINCE_DAYS" -gt 0 ] && win_label="last $BC_SINCE_DAYS days"
 
-  # opsi lanjutan
-  UI_HINTS=("semua branch · identitas author · max $BC_MAX_COMMITS commit/branch · $BC_WORKERS worker"
-    "Filter branch, author vs committer, batas commit, jumlah worker")
-  ui_select k "Opsi lanjutan" "Pakai default (rekomendasi)" "Atur sendiri" || return
+  # advanced options
+  UI_HINTS=("all branches · author identity · max $BC_MAX_COMMITS commits/branch · $BC_WORKERS workers"
+    "Branch filter, author vs committer, commit cap, worker count")
+  ui_select k "Advanced options" "Use defaults (recommended)" "Customize" || return
   if [ "$k" = 1 ]; then
-    ui_hint "Filter pakai glob, pisah koma. Contoh: main,develop,release/*  (kosong = semua)"
-    ui_input BC_FILTER "Filter branch" ""
-    UI_HINTS=("Orang yang nulis kodenya (biasanya ini yang dimaksud 'committer')"
-      "Orang yang nge-commit/apply (beda kalau rebase, cherry-pick, merge via UI)")
-    ui_select k "Hitung berdasarkan" "Author" "Committer" || return
+    ui_hint "Glob filter, comma-separated. E.g. main,develop,release/*  (empty = all)"
+    ui_input BC_FILTER "Branch filter" ""
+    UI_HINTS=("Whoever wrote the code (usually what people mean by 'committer')"
+      "Whoever committed/applied it (differs after rebase, cherry-pick, merge via UI)")
+    ui_select k "Count by" "Author" "Committer" || return
     BC_IDENTITY=author; [ "$k" = 1 ] && BC_IDENTITY=committer
     UI_SELECT_DEFAULT=1
-    UI_HINTS=("Cepet, cocok buat branch pendek" "Seimbang (default)" "Buat repo monorepo / history panjang" "Bisa lama banget + boros request API")
-    ui_select k "Batas commit per branch" "1.000" "5.000" "20.000" "Tanpa batas" || return
+    UI_HINTS=("Fast, fine for short-lived branches" "Balanced (default)" "For monorepos / long histories" "Can be very slow + many API requests")
+    ui_select k "Commit cap per branch" "1,000" "5,000" "20,000" "No limit" || return
     case "$k" in 0) BC_MAX_COMMITS=1000 ;; 1) BC_MAX_COMMITS=5000 ;; 2) BC_MAX_COMMITS=20000 ;; 3) BC_MAX_COMMITS=0 ;; esac
-    while :; do ui_input v "Jumlah worker paralel" "$BC_WORKERS"; _bc_is_int "$v" && [ "$v" -ge 1 ] && [ "$v" -le 32 ] && break; ui_warn "Isi 1–32"; done
+    while :; do ui_input v "Parallel workers" "$BC_WORKERS"; _bc_is_int "$v" && [ "$v" -ge 1 ] && [ "$v" -le 32 ] && break; ui_warn "Enter 1–32"; done
     BC_WORKERS=$v
   fi
-  adv_label="$BC_IDENTITY · max $([ "$BC_MAX_COMMITS" -gt 0 ] && printf '%s' "$BC_MAX_COMMITS" || printf '∞') commit/branch · $BC_WORKERS worker"
+  adv_label="$BC_IDENTITY · max $([ "$BC_MAX_COMMITS" -gt 0 ] && printf '%s' "$BC_MAX_COMMITS" || printf '∞') commits/branch · $BC_WORKERS workers"
   [ -n "$BC_FILTER" ] && adv_label="filter '$BC_FILTER' · $adv_label"
 
   # format & output
   ui_nl
-  UI_HINTS=("Lengkap: semua committer per branch, nested per repo" "Flat 1 baris per branch, enak buat Excel/Sheets" "Dua-duanya")
-  ui_select k "Format report" "JSON" "CSV" "JSON + CSV" || return
+  UI_HINTS=("Complete: every committer per branch, nested per repo" "Flat, one row per branch — great for Excel/Sheets" "Both")
+  ui_select k "Report format" "JSON" "CSV" "JSON + CSV" || return
   case "$k" in 0) BC_FORMAT=json ;; 1) BC_FORMAT=csv ;; 2) BC_FORMAT=both ;; esac
-  ui_input BC_OUT "Folder output" "$GLB_ROOT/reports" path
+  ui_input BC_OUT "Output folder" "$GLB_ROOT/reports" path
 
-  # ringkasan
+  # summary
   ui_nl
-  ui_box "Siap jalan" \
-    "${DIM}Koneksi ${RST} $(profile_label "$BC_PROFILE")" \
-    "${DIM}Repo    ${RST} $src_label" \
-    "${DIM}Rentang ${RST} $win_label" \
-    "${DIM}Opsi    ${RST} $adv_label" \
+  ui_box "Ready to run" \
+    "${DIM}Connect ${RST} $(profile_label "$BC_PROFILE")" \
+    "${DIM}Repos   ${RST} $src_label" \
+    "${DIM}Range   ${RST} $win_label" \
+    "${DIM}Options ${RST} $adv_label" \
     "${DIM}Output  ${RST} $(printf '%s' "$BC_FORMAT" | tr '[:lower:]' '[:upper:]') → $(_bc_tilde "$BC_OUT")"
   ui_nl
-  UI_HINTS=("" "Isi ulang semua pertanyaan" "Balik ke menu utama")
-  ui_select k "Gas?" "🚀 Gas jalanin!" "✏️  Ulang dari awal" "✖  Batal" || return
+  UI_HINTS=("" "Answer all questions again" "Back to the main menu")
+  ui_select k "Go?" "🚀 Run it!" "✏️  Start over" "✖  Cancel" || return
   case "$k" in
     1) bc_interactive; return ;;
     2) return ;;
@@ -710,57 +712,58 @@ bc_interactive() {
 
   bc_run
   ui_nl
-  UI_HINTS=("" "Buka di Finder / file manager" "")
-  ui_select k "Next?" "← Balik ke menu utama" "📂 Buka folder report" "Keluar" || return
+  UI_HINTS=("" "Open in Finder / file manager" "")
+  ui_select k "Next?" "← Back to the main menu" "📂 Open the report folder" "Quit" || return
   case "$k" in
     1) if command -v open >/dev/null; then open "$(dirname "${BC_LAST_REPORT:-$BC_OUT_CSV}")"; else xdg-open "$(dirname "${BC_LAST_REPORT:-$BC_OUT_CSV}")" >/dev/null 2>&1; fi ;;
     2) exit 0 ;;
   esac
 }
 
-# ---------- mode flag / CLI (buat script & CI) ----------
+# ---------- flag mode / CLI (for scripts & CI) ----------
 bc_usage() {
   cat >&2 <<EOF
 
   ${B}gitlabbox.sh branches${RST} — $TOOL_BC_NAME
 
-  ${B}Sumber repo${RST} (bisa dicampur & diulang)
-    -r, --repo REPO          path / ID / URL. Bisa beberapa: -r a/b -r c/d atau "a/b,c/d"
-    -f, --file FILE          file .txt, 1 repo per baris (# = komentar, group:xxx = 1 group)
-    -g, --group GROUP        semua project di group + subgroup
-    -a, --account SCOPE      semua project yang bisa diakses akun/token lu. SCOPE:
-                               member (member langsung / via group) · owned · reporter
-                               developer · maintainer (role minimal) · all (self-hosted aja)
-        --mine               singkatan --account member
-        --repo-filter GLOB   saring hasil group/akun, pisah koma. contoh: 'backend/*,*-svc'
-        --include-archived   ikut sertain project archived (default di-skip)
+  ${B}Repo sources${RST} (can be mixed & repeated)
+    -r, --repo REPO          path / ID / URL. Several allowed: -r a/b -r c/d or "a/b,c/d"
+    -f, --file FILE          .txt file, one repo per line (# = comment, group:xxx = a whole group)
+    -g, --group GROUP        every project in the group + subgroups
+    -a, --account SCOPE      every project your account/token can access. SCOPE:
+                               member (direct / via group) · owned · reporter
+                               developer · maintainer (minimum role) · all (self-hosted only)
+        --mine               shorthand for --account member
+        --repo-filter GLOB   filter group/account results, comma-separated. e.g. 'backend/*,*-svc'
+        --include-archived   include archived projects (skipped by default)
 
-  ${B}Koneksi${RST}
-    -p, --profile NAME       profile dari 'gitlabbox.sh setup' (default: profile default)
-                             tanpa config: pakai env GITLAB_URL + GITLAB_TOKEN
+  ${B}Connection${RST}
+    -p, --profile NAME       profile from 'gitlabbox.sh setup' (default: the default profile)
+                             without config: uses env GITLAB_URL + GITLAB_TOKEN
 
-  ${B}Analisis${RST}
-    -d, --since-days N       cuma hitung commit N hari terakhir (default: semua history)
-    -m, --max-commits N      batas commit dibaca per branch (default 5000, 0 = tanpa batas)
-    -b, --branch-filter GLOB filter nama branch, pisah koma. contoh: 'main,release/*'
+  ${B}Analysis${RST}
+    -d, --since-days N       only count commits from the last N days (default: full history)
+        --all-history        force full history
+    -m, --max-commits N      max commits read per branch (default 5000, 0 = no limit)
+    -b, --branch-filter GLOB branch name filter, comma-separated. e.g. 'main,release/*'
         --identity WHO       author (default) | committer
-    -w, --workers N          request paralel per repo (default 6)
-        --top N              jumlah top committer per branch di report (default 5)
+    -w, --workers N          parallel requests per repo (default 6)
+        --top N              top committers per branch in the report (default 5)
 
   ${B}Output${RST}
     -F, --format FMT         json (default) | csv | both
-    -o, --out PATH           folder, atau nama file (.json/.csv), atau '-' buat stdout
-        --rows N             baris tabel per repo di layar (default 10)
+    -o, --out PATH           folder, file name (.json/.csv), or '-' for stdout
+        --rows N             table rows per repo on screen (default 10)
 
-  ${B}Contoh${RST}
+  ${B}Examples${RST}
     ./gitlabbox.sh branches -r my-group/my-app
     ./gitlabbox.sh branches -f repos.txt -d 90 -F both
     ./gitlabbox.sh branches -g my-org/backend -b 'main,release/*' -o reports/
     ./gitlabbox.sh branches --mine -d 90 -F both
-    ./gitlabbox.sh branches -a developer --repo-filter 'payments/*' -p kantor
+    ./gitlabbox.sh branches -a developer --repo-filter 'payments/*' -p work
     GITLAB_URL=https://gitlab.example.com GITLAB_TOKEN=\$TOKEN ./gitlabbox.sh branches -r 123 -o - | jq .summary
 
-  ${DIM}Exit code: 0 semua sukses · 3 sebagian repo gagal · 1 gagal total / error input${RST}
+  ${DIM}Exit codes: 0 all succeeded · 3 some repos failed · 1 total failure / input error${RST}
 
 EOF
 }
@@ -778,7 +781,7 @@ bc_cli() {
       -r | --repo)
         while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(split_targets "$2"); shift 2 ;;
       -f | --file)
-        [ -f "$2" ] || { ui_err "File '$2' gak ketemu."; return 1; }
+        [ -f "$2" ] || { ui_err "File '$2' not found."; return 1; }
         while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(read_targets_file "$2"); shift 2 ;;
       -g | --group) BC_TARGETS+=("group:$2"); shift 2 ;;
       -a | --account)
@@ -787,30 +790,30 @@ bc_cli() {
       --mine) BC_TARGETS+=("account:member"); shift ;;
       --repo-filter) BC_REPO_FILTER="$2"; shift 2 ;;
       --include-archived) BC_INCLUDE_ARCHIVED=1; shift ;;
-      -d | --since-days) _bc_is_int "$2" || { ui_err "--since-days harus angka"; return 1; }; BC_SINCE_DAYS="$2"; shift 2 ;;
+      -d | --since-days) _bc_is_int "$2" || { ui_err "--since-days must be a number"; return 1; }; BC_SINCE_DAYS="$2"; shift 2 ;;
       --all-history) BC_SINCE_DAYS=0; shift ;;
-      -m | --max-commits) _bc_is_int "$2" || { ui_err "--max-commits harus angka"; return 1; }; BC_MAX_COMMITS="$2"; shift 2 ;;
+      -m | --max-commits) _bc_is_int "$2" || { ui_err "--max-commits must be a number"; return 1; }; BC_MAX_COMMITS="$2"; shift 2 ;;
       -b | --branch-filter) BC_FILTER="$2"; shift 2 ;;
       --identity)
         case "$2" in author | committer) BC_IDENTITY="$2" ;; *) ui_err "--identity: author | committer"; return 1 ;; esac
         shift 2 ;;
-      -w | --workers) _bc_is_int "$2" && [ "$2" -ge 1 ] || { ui_err "--workers minimal 1"; return 1; }; BC_WORKERS="$2"; shift 2 ;;
-      --top) _bc_is_int "$2" || { ui_err "--top harus angka"; return 1; }; BC_TOP="$2"; shift 2 ;;
-      --rows) _bc_is_int "$2" || { ui_err "--rows harus angka"; return 1; }; BC_ROWS="$2"; shift 2 ;;
+      -w | --workers) _bc_is_int "$2" && [ "$2" -ge 1 ] || { ui_err "--workers must be at least 1"; return 1; }; BC_WORKERS="$2"; shift 2 ;;
+      --top) _bc_is_int "$2" || { ui_err "--top must be a number"; return 1; }; BC_TOP="$2"; shift 2 ;;
+      --rows) _bc_is_int "$2" || { ui_err "--rows must be a number"; return 1; }; BC_ROWS="$2"; shift 2 ;;
       -F | --format)
         case "$2" in json | csv | both) BC_FORMAT="$2" ;; *) ui_err "--format: json | csv | both"; return 1 ;; esac
         shift 2 ;;
       -o | --out) BC_OUT="$2"; shift 2 ;;
-      -*) ui_err "Opsi gak dikenal: $1"; bc_usage; return 1 ;;
+      -*) ui_err "Unknown option: $1"; bc_usage; return 1 ;;
       *) BC_TARGETS+=("$1"); shift ;;
     esac
   done
   if [ "${#BC_TARGETS[@]}" -eq 0 ]; then
-    ui_err "Belum ada repo. Pakai -r, -f, atau -g."
+    ui_err "No repos given. Use -r, -f, -g, or -a."
     bc_usage
     return 1
   fi
-  if [ "$BC_OUT" = - ] && [ "$BC_FORMAT" = both ]; then ui_err "-o - cuma bisa 1 format (json atau csv)."; return 1; fi
+  if [ "$BC_OUT" = - ] && [ "$BC_FORMAT" = both ]; then ui_err "-o - supports a single format only (json or csv)."; return 1; fi
   bc_prepare_profile || return 1
   bc_run
 }

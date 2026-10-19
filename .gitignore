@@ -1,12 +1,12 @@
-# Hasil scan — berisi nama repo, branch, nama & email orang. Jangan di-commit.
+# Scan results — contain repo names, branches, people's names & emails. Never commit them.
 reports/*
 !reports/.gitkeep
 
-# Daftar repo pribadi (pakai repos.example.txt sebagai template)
+# Private repo lists (use repos.example.txt as the template)
 repos.txt
 *.repos.txt
 
-# Config lokal / token (normalnya di ~/.gitlabbox, ini jaga-jaga)
+# Local config / tokens (normally in ~/.gitlabbox, this is a safety net)
 .gitlabbox/
 config.json
 *.hdr
