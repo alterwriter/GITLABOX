@@ -1,0 +1,20 @@
+# Hasil scan — berisi nama repo, branch, nama & email orang. Jangan di-commit.
+reports/*
+!reports/.gitkeep
+
+# Daftar repo pribadi (pakai repos.example.txt sebagai template)
+repos.txt
+*.repos.txt
+
+# Config lokal / token (normalnya di ~/.gitlabbox, ini jaga-jaga)
+.gitlabbox/
+config.json
+*.hdr
+*.pem
+*.crt
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp

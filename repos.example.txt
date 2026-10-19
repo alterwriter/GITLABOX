@@ -1,0 +1,28 @@
+# GITLABBOX — daftar repo buat bulk scan
+# Copy jadi repos.txt:  cp repos.example.txt repos.txt
+#
+# 1 repo per baris. Format boleh dicampur. '#' = komentar (boleh di akhir baris).
+
+# path biasa (pakai profile default / yang dipilih)
+my-group/my-app
+my-group/sub-group/payment-service
+
+# project ID
+12345
+
+# URL dari browser — host-nya otomatis dicocokin ke profile yang sesuai
+https://gitlab.com/acme/mobile-app
+https://gitlab.example.com/backend/api/-/tree/main
+
+# clone URL (SSH / HTTPS)
+git@gitlab.example.com:backend/worker.git
+https://gitlab.example.com/backend/notification.git
+
+# semua project di 1 group (+ subgroup), non-archived
+group:my-org/backend
+
+# semua project yang bisa diakses akun (token) lu
+#   scope: member · owned · reporter · developer · maintainer · all (self-hosted aja)
+# account:member
+# account:developer@gitlab.example.com
+# mine                                    # = account:member
