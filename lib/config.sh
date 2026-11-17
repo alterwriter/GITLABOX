@@ -69,6 +69,34 @@ url_path() { # https://host/gitlab → /gitlab
   case "$r" in */*) printf '/%s' "${r#*/}" ;; *) printf '' ;; esac
 }
 
+# Report folders: PARENT/<YYYY-MM-DD_HHMM>_<tool>_<scope>[_2], e.g. 2026-11-18_0939_branches_backend
+name_slug() { # "My Team/x" → My-Team-x, max 24 chars
+  local s
+  s=$(printf '%s' "$1" | tr -c 'A-Za-z0-9.+-' '-' | sed 's/--*/-/g; s/^[-.]*//')
+  if [ "${#s}" -gt 24 ]; then # cut at a word boundary
+    s="${s:0:25}"
+    case "$s" in *-*) s="${s%-*}" ;; *) s="${s:0:24}" ;; esac
+  fi
+  s=$(printf '%s' "$s" | sed 's/[-.+]*$//')
+  printf '%s' "${s:-scan}"
+}
+
+make_report_dir() { # PARENT TOOL SCOPE → creates and prints a new, unused folder
+  local base d n=2
+  base="${1%/}/$(date +%Y-%m-%d_%H%M)_$2_$(name_slug "$3")"
+  d="$base"
+  while [ -e "$d" ]; do d="${base}_$n"; n=$((n + 1)); done
+  mkdir -p "$d" && printf '%s' "$d"
+}
+
+scope_list() { # NOUN NAME... → "a" · "a+b" · "5-groups"
+  local noun="$1"; shift
+  case $# in
+    1 | 2) printf '%s\n' "$@" | paste -sd+ - ;;
+    *) printf '%d-%s' $# "$noun" ;;
+  esac
+}
+
 # Active profile: argument → config default → the only profile → "env"
 cfg_resolve_name() {
   local want="$1" d c

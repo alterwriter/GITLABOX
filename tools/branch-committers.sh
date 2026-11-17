@@ -24,6 +24,7 @@ bc_defaults() {
   BC_INCLUDE_ARCHIVED=0
   BC_FORMAT=json
   BC_OUT=""
+  BC_SCOPE=""
   BC_WORKERS=6
   BC_TOP=5
   BC_ROWS=10
@@ -370,25 +371,37 @@ bc_legend() {
 }
 
 # ---------- run ----------
-_bc_out_paths() {
-  local slug ts dir=""
-  ts=$(date +%Y%m%d-%H%M%S)
-  if [ "$BC_N" -eq 1 ]; then
-    slug=$(printf '%s' "${BC_T_PATH[0]}" | tr '/' '_' | tr -c 'A-Za-z0-9_.-' '-')
+_bc_scope() { # short name of what was scanned, for the report folder
+  local t groups=() one=""
+  [ -n "$BC_SCOPE" ] && { printf '%s' "$BC_SCOPE"; return; }
+  for t in "${BC_TARGETS[@]}"; do
+    parse_target "$t" || continue
+    case "$T_KIND" in
+      group) groups+=("${T_PATH##*/}"); one="${T_PATH##*/}" ;;
+      account) one="my-repos" ;;
+      *) one="${T_PATH##*/}" ;;
+    esac
+  done
+  if [ "${#BC_TARGETS[@]}" -eq 1 ] && [ -n "$one" ]; then
+    printf '%s' "$one"
+  elif [ "${#groups[@]}" -gt 0 ] && [ "${#groups[@]}" -eq "${#BC_TARGETS[@]}" ]; then
+    scope_list groups "${groups[@]}"
   else
-    slug="bulk-${BC_N}repos"
+    printf '%s-repos' "$BC_N"
   fi
+}
+
+_bc_out_paths() {
+  local dir
   BC_OUT_JSON=""; BC_OUT_CSV=""
   case "$BC_OUT" in
     -) return 0 ;;
-    *.json | *.csv) dir=$(dirname "$BC_OUT"); BC_OUT_JSON="${BC_OUT%.*}.json"; BC_OUT_CSV="${BC_OUT%.*}.csv" ;;
-    "") dir="$GLB_ROOT/reports" ;;
-    *) dir="${BC_OUT%/}" ;;
+    *.json | *.csv)
+      mkdir -p "$(dirname "$BC_OUT")" || return 1
+      BC_OUT_JSON="${BC_OUT%.*}.json"; BC_OUT_CSV="${BC_OUT%.*}.csv"; return 0 ;;
   esac
-  mkdir -p "$dir" || return 1
-  [ -z "$BC_OUT_JSON" ] && BC_OUT_JSON="$dir/branch-committers_${slug}_${ts}.json"
-  [ -z "$BC_OUT_CSV" ] && BC_OUT_CSV="$dir/branch-committers_${slug}_${ts}.csv"
-  return 0
+  dir=$(make_report_dir "${BC_OUT:-$GLB_ROOT/reports}" branches "$(_bc_scope)") || return 1
+  BC_OUT_JSON="$dir/report.json"; BC_OUT_CSV="$dir/report.csv"
 }
 
 bc_to_csv() { # REPORT_JSON
@@ -488,7 +501,7 @@ bc_run() {
 bc_view_report() { # FILE
   local f="$1" n i
   n=$(jq '.repositories | length' "$f")
-  ui_title "$(basename "$f")" "generated $(jq -r '.generated_at' "$f") · $(jq -r '.summary.repos_ok' "$f") repos · $(jq -r '.summary.branches_analyzed' "$f") branches"
+  ui_title "$(case "$f" in */report.json) basename "$(dirname "$f")" ;; *) basename "$f" ;; esac)" "generated $(jq -r '.generated_at' "$f") · $(jq -r '.summary.repos_ok' "$f") repos · $(jq -r '.summary.branches_analyzed' "$f") branches"
   for ((i = 0; i < n; i++)); do
     jq ".repositories[$i]" "$f" >"$GLB_TMP/view.json"
     printf '\n  %s[%d/%d]%s %s%s%s %s%s%s\n' "$DIM" $((i + 1)) "$n" "$RST" "$B" "$(jq -r '.project' "$GLB_TMP/view.json")" "$RST" \
@@ -505,14 +518,96 @@ bc_view_report() { # FILE
 }
 
 reports_browse() {
-  local files=() labels=() f k
-  while IFS= read -r f; do files+=("$f"); done < <(ls -t "$GLB_ROOT"/reports/*.json 2>/dev/null | head -15)
+  local files=() labels=() f k d
+  while IFS= read -r f; do files+=("$f"); done < <(ls -t "$GLB_ROOT"/reports/*/report.json "$GLB_ROOT"/reports/*/summary.json \
+    "$GLB_ROOT"/reports/*.json 2>/dev/null | head -20)
   if [ "${#files[@]}" -eq 0 ]; then ui_warn "No reports yet in $GLB_ROOT/reports"; return; fi
   for f in "${files[@]}"; do
-    labels+=("$(basename "$f") $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.branches_analyzed) branches"' "$f" 2>/dev/null)$RST")
+    d=$(basename "$(dirname "$f")")
+    case "$f" in
+      */summary.json) labels+=("🏃 $d $DIM· $(jq -r '"\(.groups | length) groups · peak \(.verdict.projected_peak) / \(.params.cap_dedicated) · \(if .verdict.fits then "fits" else "does not fit" end)"' "$f" 2>/dev/null)$RST") ;;
+      */report.json)
+        if [ "$(jq -r '.tool' "$f" 2>/dev/null)" = ci-jobs ]; then
+          labels+=("🔎 $d $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.found) found · \(.summary.missing) missing"' "$f" 2>/dev/null)$RST")
+        else
+          labels+=("🌿 $d $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.branches_analyzed) branches"' "$f" 2>/dev/null)$RST")
+        fi ;;
+      *) labels+=("🌿 $(basename "$f") $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.branches_analyzed) branches"' "$f" 2>/dev/null)$RST") ;;
+    esac
   done
   ui_select k "Choose a report" "${labels[@]}" || return
-  bc_view_report "${files[$k]}"
+  case "${files[$k]}" in
+    */summary.json) sc_view_report "$(dirname "${files[$k]}")" ;;
+    */report.json) if [ "$(jq -r '.tool' "${files[$k]}")" = ci-jobs ]; then cj_view_report "${files[$k]}"; else bc_view_report "${files[$k]}"; fi ;;
+    *) bc_view_report "${files[$k]}" ;;
+  esac
+}
+
+# ---------- repo source picker (shared with other tools) ----------
+# Sets BC_TARGETS, BC_SRC_LABEL and (for .txt files) BC_SCOPE. Returns 1 when cancelled.
+bc_pick_source() {
+  local k v line
+  BC_TARGETS=(); BC_SRC_LABEL=""; BC_SCOPE=""
+  UI_HINTS=("Type a path (group/project), ID, or URL — several allowed, comma/space separated"
+    "Auto-detect every repo your token can access (member / owner / minimum role)"
+    ".txt file, one repo per line. Mix URLs/paths/IDs freely, '#' for comments"
+    "Auto-detect every project in the groups you name + their subgroups (comma-separated)")
+  ui_select k "Where do the repos come from?" "Type them in (single / several)" "All repos my account can access" \
+    "Bulk from a .txt file" "Every project in one or more groups" || return 1
+  # index 1 = account mode; shift the rest so the case below stays 0/1/2
+  if [ "$k" = 1 ]; then
+    _bc_pick_account || return 1
+    BC_SRC_LABEL="$BC_ACCOUNT_LABEL"
+    BC_SCOPE="my-repos"
+    k=-1
+  elif [ "$k" -gt 1 ]; then
+    k=$((k - 1))
+  fi
+  case "$k" in
+    0)
+      while :; do
+        ui_input v "Repo" "" plain
+        [ -n "$v" ] && break
+        ui_hint "e.g. my-group/my-app  or  https://$GLB_HOST/my-group/my-app"
+      done
+      while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(split_targets "$v")
+      BC_SRC_LABEL="${#BC_TARGETS[@]} repos (manual)"
+      ;;
+    1)
+      while :; do
+        ui_input v ".txt file path" "$GLB_ROOT/repos.txt" path
+        if [ ! -f "$v" ]; then ui_warn "File '$v' not found. ${DIM}(Tab to autocomplete)${RST}"; continue; fi
+        BC_TARGETS=()
+        while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(read_targets_file "$v")
+        [ "${#BC_TARGETS[@]}" -gt 0 ] && break
+        ui_warn "The file is empty (or contains only comments)."
+      done
+      ui_ok "${#BC_TARGETS[@]} lines read:"
+      printf '%s\n' "${BC_TARGETS[@]}" | head -5 | while IFS= read -r line; do ui_hint "• $line"; done
+      [ "${#BC_TARGETS[@]}" -gt 5 ] && ui_hint "… +$((${#BC_TARGETS[@]} - 5)) more"
+      BC_SRC_LABEL="$(basename "$v") (${#BC_TARGETS[@]} lines)"
+      BC_SCOPE="$(basename "${v%.*}")"
+      ;;
+    2)
+      ui_hint "One or more groups, comma-separated: path or URL. A subgroup path scans only that subgroup."
+      while :; do
+        ui_input v "Group path(s)" "" plain
+        [ -n "$v" ] && break
+        ui_hint "e.g. my-org/backend  or  my-org/backend, my-org/frontend  or  https://$GLB_HOST/my-org/backend"
+      done
+      BC_TARGETS=()
+      while IFS= read -r line; do
+        parse_target "$line" && [ "$T_KIND" != account ] && line="$T_PATH"
+        [ -n "$T_HOST" ] && line="${line#groups/}"
+        BC_TARGETS+=("group:$line")
+      done < <(split_targets "$v")
+      if [ "${#BC_TARGETS[@]}" -eq 1 ]; then
+        BC_SRC_LABEL="group ${BC_TARGETS[0]#group:} (+subgroups)"
+      else
+        BC_SRC_LABEL="${#BC_TARGETS[@]} groups (+subgroups): $(printf '%s\n' "${BC_TARGETS[@]#group:}" | paste -sd, - | sed 's/,/, /g')"
+      fi
+      ;;
+  esac
 }
 
 # ---------- interactive mode ----------
@@ -605,55 +700,8 @@ bc_interactive() {
   BC_PROFILE="$PICKED_PROFILE"
   bc_prepare_profile || return
 
-  # repo source
-  UI_HINTS=("Type a path (group/project), ID, or URL — several allowed, comma/space separated"
-    "Auto-detect every repo your token can access (member / owner / minimum role)"
-    ".txt file, one repo per line. Mix URLs/paths/IDs freely, '#' for comments"
-    "Auto-detect every project in one group + its subgroups")
-  ui_select k "Where do the repos come from?" "Type them in (single / several)" "All repos my account can access" \
-    "Bulk from a .txt file" "Every project in a group" || return
-  # index 1 = account mode; shift the rest so the case below stays 0/1/2
-  if [ "$k" = 1 ]; then
-    _bc_pick_account || return
-    src_label="$BC_ACCOUNT_LABEL"
-    k=-1
-  elif [ "$k" -gt 1 ]; then
-    k=$((k - 1))
-  fi
-  case "$k" in
-    0)
-      while :; do
-        ui_input v "Repo" "" plain
-        [ -n "$v" ] && break
-        ui_hint "e.g. my-group/my-app  or  https://$GLB_HOST/my-group/my-app"
-      done
-      while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(split_targets "$v")
-      src_label="${#BC_TARGETS[@]} repos (manual)"
-      ;;
-    1)
-      while :; do
-        ui_input v ".txt file path" "$GLB_ROOT/repos.txt" path
-        if [ ! -f "$v" ]; then ui_warn "File '$v' not found. ${DIM}(Tab to autocomplete)${RST}"; continue; fi
-        BC_TARGETS=()
-        while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(read_targets_file "$v")
-        [ "${#BC_TARGETS[@]}" -gt 0 ] && break
-        ui_warn "The file is empty (or contains only comments)."
-      done
-      ui_ok "${#BC_TARGETS[@]} lines read:"
-      printf '%s\n' "${BC_TARGETS[@]}" | head -5 | while IFS= read -r line; do ui_hint "• $line"; done
-      [ "${#BC_TARGETS[@]}" -gt 5 ] && ui_hint "… +$((${#BC_TARGETS[@]} - 5)) more"
-      src_label="$(basename "$v") (${#BC_TARGETS[@]} lines)"
-      ;;
-    2)
-      while :; do
-        ui_input v "Group path" "" plain
-        [ -n "$v" ] && break
-      done
-      parse_target "$v" && v="$T_PATH"
-      BC_TARGETS=("group:$v")
-      src_label="group $v (+subgroups)"
-      ;;
-  esac
+  bc_pick_source || return
+  src_label="$BC_SRC_LABEL"
 
   # time range
   ui_nl
@@ -729,7 +777,7 @@ bc_usage() {
   ${B}Repo sources${RST} (can be mixed & repeated)
     -r, --repo REPO          path / ID / URL. Several allowed: -r a/b -r c/d or "a/b,c/d"
     -f, --file FILE          .txt file, one repo per line (# = comment, group:xxx = a whole group)
-    -g, --group GROUP        every project in the group + subgroups
+    -g, --group LIST         every project in these groups + subgroups (comma-separated, repeatable)
     -a, --account SCOPE      every project your account/token can access. SCOPE:
                                member (direct / via group) · owned · reporter
                                developer · maintainer (minimum role) · all (self-hosted only)
@@ -752,7 +800,8 @@ bc_usage() {
 
   ${B}Output${RST}
     -F, --format FMT         json (default) | csv | both
-    -o, --out PATH           folder, file name (.json/.csv), or '-' for stdout
+    -o, --out PATH           parent folder (→ PATH/<date>_branches_<scope>/report.json),
+                             a file name (.json/.csv), or '-' for stdout
         --rows N             table rows per repo on screen (default 10)
 
   ${B}Examples${RST}
@@ -782,8 +831,10 @@ bc_cli() {
         while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(split_targets "$2"); shift 2 ;;
       -f | --file)
         [ -f "$2" ] || { ui_err "File '$2' not found."; return 1; }
+        BC_SCOPE="$(basename "${2%.*}")"
         while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(read_targets_file "$2"); shift 2 ;;
-      -g | --group) BC_TARGETS+=("group:$2"); shift 2 ;;
+      -g | --group)
+        while IFS= read -r line; do BC_TARGETS+=("group:$line"); done < <(split_targets "$2"); shift 2 ;;
       -a | --account)
         case " $BC_ACCOUNT_SCOPES " in *" $2 "*) ;; *) ui_err "--account: $BC_ACCOUNT_SCOPES"; return 1 ;; esac
         BC_TARGETS+=("account:$2"); shift 2 ;;

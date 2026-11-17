@@ -6,6 +6,7 @@ Tools in the box:
 
 - **Branch & Committer Report** — lists every branch in one or many repositories, counts the **unique committers per branch**, sorts them from busiest to quietest, and exports the result to **JSON** or **CSV**.
 - **SAST Gate Capacity Planner** — collects push/merge traffic per group, measures the SAST jobs already running for onboarded groups, calibrates the estimate, and checks whether a dedicated runner has enough capacity for every group (with an onboarding order when it doesn't).
+- **CI Job Detector** — checks, for every repo in your repos / groups / account, whether a job you name (e.g. `sast:gate`, `*sast*`) is defined in its CI config and whether it ran in the latest pipeline.
 
 ```
    ██████╗ ██╗████████╗██╗      █████╗ ██████╗ ██████╗  ██████╗ ██╗  ██╗
@@ -20,6 +21,7 @@ Tools in the box:
   ? What do you want to do? (↑/↓ · Enter · q to cancel)
   ❯ 🌿  Branch & Committer Report
     🏃  SAST Gate Capacity Planner
+    🔎  CI Job Detector
     📊  View saved reports
     🔌  Set up a GitLab connection
     🗂   Manage profiles
@@ -55,7 +57,9 @@ Flag mode examples:
 ./gitlabbox.sh branches --mine -d 90 -F both               # all your repos, last 90 days
 ./gitlabbox.sh branches -f repos.txt -b 'main,release/*'   # bulk from a file
 ./gitlabbox.sh branches -g my-org/backend -o - | jq .summary
+./gitlabbox.sh branches -g 'my-org/backend,my-org/frontend'  # several groups
 ./gitlabbox.sh capacity --onboarded 'A=org/team-a' --target 'B=org/team-b,org/team-c' --capacity 100
+./gitlabbox.sh cijobs -g my-org -j 'sast:gate,*sast*'        # which repos run a SAST job?
 ```
 
 Sample output:
@@ -85,6 +89,7 @@ Sample output:
 | [Troubleshooting](docs/07-troubleshooting.md) | Common errors and fixes |
 | [Security](docs/08-security.md) | Security model, token storage, data in reports |
 | [SAST Gate Capacity Planner](docs/09-sast-capacity-planner.md) | Traffic collection, calibration against actual SAST jobs, runner capacity verdict, onboarding order |
+| [CI Job Detector](docs/10-ci-job-detector.md) | Defined vs ran per repo, job name matching, results, output |
 
 ## Layout
 
@@ -101,10 +106,11 @@ GITLABOX/
 │   ├── branch-committers.sh   # Tool #1: Branch & Committer Report
 │   ├── sast-capacity.sh       # Tool #2: SAST Gate Capacity Planner (collection, UI, CLI)
 │   ├── sast-capacity.jq       #          analysis (peaks, calibration, verdict, plan)
-│   └── sast-capacity-report.jq #         Markdown report
+│   ├── sast-capacity-report.jq #         Markdown report
+│   └── ci-jobs.sh             # Tool #3: CI Job Detector
 ├── docs/                      # detailed documentation
 ├── repos.example.txt          # repo list template
-└── reports/                   # default output (git-ignored)
+└── reports/                   # default output, one folder per scan: <date>_<tool>_<scope>/ (git-ignored)
 ```
 
 ## Privacy note

@@ -40,6 +40,8 @@ export GLB_ROOT GLB_SELF GLB_VERSION GLB_TIMEOUT
 . "$GLB_ROOT/tools/branch-committers.sh"
 # shellcheck source=tools/sast-capacity.sh
 . "$GLB_ROOT/tools/sast-capacity.sh"
+# shellcheck source=tools/ci-jobs.sh
+. "$GLB_ROOT/tools/ci-jobs.sh"
 
 # Internal worker (invoked by xargs -P); skips the setup/traps below.
 if [ "${1:-}" = __bc_branch ]; then
@@ -48,6 +50,10 @@ if [ "${1:-}" = __bc_branch ]; then
 fi
 if [ "${1:-}" = __sc_project ]; then
   sc_worker "$2"
+  exit 0
+fi
+if [ "${1:-}" = __cj_project ]; then
+  cj_worker "$2"
   exit 0
 fi
 
@@ -88,6 +94,7 @@ usage() {
     ./gitlabbox.sh whoami [-p P]   test connection + token info
     ./gitlabbox.sh branches -h     $TOOL_BC_NAME (flag mode, for scripts/CI)
     ./gitlabbox.sh capacity -h     $TOOL_SC_NAME (flag mode, for scripts/CI)
+    ./gitlabbox.sh cijobs -h       $TOOL_CJ_NAME (flag mode, for scripts/CI)
     ./gitlabbox.sh reports         view saved reports
 
   ${B}Environment${RST}
@@ -132,7 +139,8 @@ interactive_main() {
     ui_nl
     UI_HINTS=("List branches + committer count per repo (single / all your repos / .txt / group) → JSON/CSV"
       "Push/merge traffic + actual SAST jobs per group → does a dedicated runner have enough capacity?"
-      "Re-open a JSON report you generated earlier"
+      "Is a job like sast:gate defined in each repo's pipeline — and did it run? (repos / groups / all your repos)"
+      "Re-open a report you generated earlier"
       "Add a connection: gitlab.com, self-hosted, or Dedicated"
       "Test / change token / set default / delete a profile"
       "Check token validity, user, scopes, GitLab version"
@@ -140,6 +148,7 @@ interactive_main() {
     ui_select k "What do you want to do?" \
       "🌿  $TOOL_BC_NAME" \
       "🏃  $TOOL_SC_NAME" \
+      "🔎  $TOOL_CJ_NAME" \
       "📊  View saved reports" \
       "🔌  Set up a GitLab connection" \
       "🗂   Manage profiles" \
@@ -148,11 +157,12 @@ interactive_main() {
     case "$k" in
       0) bc_interactive ;;
       1) sc_interactive ;;
-      2) reports_browse; ui_pause ;;
-      3) setup_wizard; ui_pause ;;
-      4) profiles_manage ;;
-      5) whoami_cmd; ui_pause ;;
-      6) exit 0 ;;
+      2) cj_interactive ;;
+      3) reports_browse; ui_pause ;;
+      4) setup_wizard; ui_pause ;;
+      5) profiles_manage ;;
+      6) whoami_cmd; ui_pause ;;
+      7) exit 0 ;;
     esac
   done
 }
@@ -165,6 +175,7 @@ main() {
     whoami) shift; whoami_cmd "$@" ;;
     branches | branch-committers | bc) shift; bc_cli "$@" ;;
     capacity | sast-capacity | sc) shift; sc_cli "$@" ;;
+    cijobs | ci-jobs | cj) shift; cj_cli "$@" ;;
     reports) reports_browse ;;
     -h | --help | help) usage ;;
     -v | --version | version) printf 'gitlabbox %s\n' "$GLB_VERSION" ;;

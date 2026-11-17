@@ -42,6 +42,7 @@ sc_defaults() {
   SC_QUEUE_THR=30
   SC_WORKERS=6
   SC_OUT=""
+  SC_ALL_CSV=0
   SC_INCLUDE_ARCHIVED=0
 }
 
@@ -143,8 +144,8 @@ _sc_compute_period() {
   SC_FROM_LABEL=$(jq -nr --argjson t "$SC_START" --argjson o "$SC_OFF" '($t + $o) | todate | .[:10]')
   SC_TO_LABEL=$(jq -nr --argjson t "$((SC_END - 1))" --argjson o "$SC_OFF" '($t + $o) | todate | .[:10]')
   SC_WINDOWS=$(jq -nc --argjson d "$SC_DAYS" '
-    [{label: "1d", secs: 86400}, {label: "1w", secs: 604800},
-     {label: (if $d == 30 then "1m" else "\($d)d" end), secs: ($d * 86400)}]
+    [{label: "1d", secs: 86400}, {label: "1w", secs: 604800}, {label: "1m", secs: 2592000}, {label: "1y", secs: 31536000},
+     {label: "\($d)d", secs: ($d * 86400)}]
     | map(select(.secs <= $d * 86400)) | unique_by(.secs) | sort_by(.secs)')
   SC_BRANCHES_JSON=$(printf '%s\n' "$SC_BRANCHES" | tr ',' '\n' | while IFS= read -r b; do _sc_trim "$b"; echo; done |
     sed '/^$/d' | jq -R . | jq -sc .)
@@ -318,8 +319,26 @@ sc_collect_runners() {
 }
 
 # ---------- outputs ----------
-sc_write_csvs() { # SUMMARY OUTDIR
+sc_write_csvs() { # SUMMARY OUTDIR — report.csv always; the detailed CSVs only with --all-csv
   local s="$1" d="$2"
+  jq -r '([.combined[].window] | to_entries | map({(.value): .key}) | add) as $order
+    | ["window","group","status","active_repos","pushes","commits","merges","events","est_jobs",
+     "peak_events_hour","peak_events_hour_at","peak_events_minute","peak_events_minute_at",
+     "peak_concurrency","peak_concurrency_at","source",
+     "actual_sast_jobs","actual_avg_duration_s","actual_p95_duration_s","queued_jobs","queue_avg_s","util_peak_pct",
+     "capacity","headroom","fits","recommended_capacity"],
+      (([.groups[] | . as $g | .windows[] |
+        {o: $order[.window], r: [.window, $g.name, $g.status, .active_repos, .pushes, .commits, .merges, .events, .est_jobs_corrected,
+          .peak_events_per_hour.count, .peak_events_per_hour.at, .peak_events_per_minute.count, .peak_events_per_minute.at,
+          .projected_peak.peak, .projected_peak.at, .projected_source,
+          .actual.jobs, .actual.avg_duration_s, .actual.p95_duration_s, .actual.queued_jobs, .actual.queue_avg_s, .actual.util_peak_pct,
+          null, null, null, null]}]
+       + [.combined[] | {o: $order[.window], t: 1, r: [.window, "TOTAL", "all groups", null, null, null, null, .events, .est_jobs_corrected,
+          null, null, null, null, .projected_peak.peak, .projected_peak.at, "combined",
+          null, null, null, null, null, null, .capacity, .headroom, .fits, .recommended_capacity]}])
+        | sort_by(.o, .t // 0)[] | .r)
+    | @csv' "$s" >"$d/report.csv"
+  [ "$SC_ALL_CSV" = 1 ] || return 0
   jq -r '
     ["group","status","window","active_repos","pushes","commits","merges","events","est_jobs_raw","est_jobs_corrected",
      "peak_events_hour","peak_events_hour_at","peak_events_minute","peak_events_minute_at",
@@ -428,8 +447,46 @@ sc_print_results() { # SUMMARY
   fi
 }
 
+_sc_scope() { # group labels, for the report folder name
+  local g names=()
+  for g in "${SC_GROUPS[@]}"; do names+=("$(printf '%s' "$g" | cut -f2)"); done
+  scope_list groups "${names[@]}"
+}
+
+sc_verdict_box() { # SUMMARY DIR
+  local s="$1" fits lines=()
+  fits=$(jq -r '.verdict.fits' "$s")
+  lines+=("${DIM}Verdict  ${RST} $([ "$fits" = true ] && printf '%s✔ FITS%s' "$CG" "$RST" || printf '%s✖ DOES NOT FIT%s' "$CR" "$RST")")
+  lines+=("${DIM}Peak     ${RST} $(jq -r '.verdict.projected_peak' "$s") concurrent jobs at $(jq -r '.verdict.projected_peak_at // "—"' "$s") (window $(jq -r '.verdict.window' "$s"))")
+  lines+=("${DIM}Capacity ${RST} $(jq -r '.params.cap_dedicated' "$s") · headroom $(jq -r '.verdict.headroom' "$s") · recommended with $(jq -r '.params.safety_pct' "$s")% margin: $(jq -r '.verdict.recommended_capacity' "$s")")
+  [ "$fits" != true ] && lines+=("${DIM}Short by ${RST} $(jq -r '.verdict.extra_capacity_needed' "$s") jobs")
+  [ "$(jq '.groups_failed | length' "$s")" -gt 0 ] &&
+    lines+=("${DIM}Missing  ${RST} ${CY}$(jq -r '.groups_failed | map(.name) | join(", ")' "$s") not measured (read errors)${RST}")
+  [ "$(jq '.plan.wave1 | length' "$s")" -gt 0 ] && lines+=("${DIM}Wave 1   ${RST} $(jq -r '.plan.wave1 | join(", ")' "$s")")
+  [ "$(jq '.plan.wave2 | length' "$s")" -gt 0 ] && lines+=("${DIM}Wave 2   ${RST} $(jq -r '.plan.wave2 | join(", ")' "$s") ${DIM}(after adding capacity)${RST}")
+  lines+=("${DIM}Duration ${RST} $(ui_duration "$(jq -r '.duration_seconds // 0' "$s")")")
+  lines+=("${DIM}Report   ${RST} ${CC}$(_bc_tilde "$2")/report.md${RST}")
+  ui_nl
+  ui_box "Capacity check" "${lines[@]}"
+  ui_hint "$(jq -r '.verdict.summary' "$s")"
+  if [ -f "$2/groups_windows.csv" ]; then
+    ui_hint "Files: report.csv · report.md · summary.json + detailed CSVs (groups_windows, combined, branches, onboarding_plan, distribution_*, events_hourly)"
+  else
+    ui_hint "Files: report.csv (every window + TOTAL in one sheet) · report.md · summary.json  ·  --all-csv adds the detailed CSVs"
+  fi
+}
+
+sc_view_report() { # DIR — re-show a saved capacity report
+  local s="$1/summary.json"
+  SC_JPE=$(jq -r '.params.jpe' "$s"); SC_CAP=$(jq -r '.params.cap_dedicated' "$s")
+  SC_CAP_EXISTING=$(jq -r '.params.cap_existing' "$s"); SC_RUNNER_IDS=$(jq -r '.params.runner_ids | join(",")' "$s")
+  ui_title "$(basename "$1")" "generated $(jq -r '.generated_at' "$s") · period $(jq -r '"\(.period.from) → \(.period.to)"' "$s")"
+  sc_print_results "$s"
+  sc_verdict_box "$s" "$1"
+}
+
 sc_run() {
-  local i t0=$SECONDS s fits lines=() outdir ts
+  local i t0=$SECONDS s outdir
   if [ -z "$GLB_HDR" ]; then
     ui_err "Profile '$GLB_PROFILE' has no token. This tool needs a PAT with read_api (Reporter on every group)."
     return 1
@@ -475,31 +532,14 @@ sc_run() {
      period: {from: $f, to: $t, days: $d}} + del(.tool)' "$s.tmp" >"$s"
   ui_spin_stop 0 "Analysis done"
 
-  ts=$(date +%Y%m%d-%H%M%S)
-  outdir="${SC_OUT:-$GLB_ROOT/reports}"
-  outdir="${outdir%/}/sast-capacity_$ts"
-  mkdir -p "$outdir" || { ui_err "Cannot create $outdir"; return 1; }
+  outdir=$(make_report_dir "${SC_OUT:-$GLB_ROOT/reports}" capacity "$(_sc_scope)") ||
+    { ui_err "Cannot create a report folder in ${SC_OUT:-$GLB_ROOT/reports}"; return 1; }
   jq . "$s" >"$outdir/summary.json"
   sc_write_csvs "$s" "$outdir"
   jq -r -f "$GLB_ROOT/tools/sast-capacity-report.jq" "$s" >"$outdir/report.md"
 
   sc_print_results "$s"
-
-  fits=$(jq -r '.verdict.fits' "$s")
-  lines+=("${DIM}Verdict  ${RST} $([ "$fits" = true ] && printf '%s✔ FITS%s' "$CG" "$RST" || printf '%s✖ DOES NOT FIT%s' "$CR" "$RST")")
-  lines+=("${DIM}Peak     ${RST} $(jq -r '.verdict.projected_peak' "$s") concurrent jobs at $(jq -r '.verdict.projected_peak_at // "—"' "$s") (window $(jq -r '.verdict.window' "$s"))")
-  lines+=("${DIM}Capacity ${RST} $SC_CAP · headroom $(jq -r '.verdict.headroom' "$s") · recommended with ${SC_SAFETY}% margin: $(jq -r '.verdict.recommended_capacity' "$s")")
-  [ "$fits" != true ] && lines+=("${DIM}Short by ${RST} $(jq -r '.verdict.extra_capacity_needed' "$s") jobs")
-  [ "$(jq '.groups_failed | length' "$s")" -gt 0 ] &&
-    lines+=("${DIM}Missing  ${RST} ${CY}$(jq -r '.groups_failed | map(.name) | join(", ")' "$s") not measured (read errors)${RST}")
-  [ "$(jq '.plan.wave1 | length' "$s")" -gt 0 ] && lines+=("${DIM}Wave 1   ${RST} $(jq -r '.plan.wave1 | join(", ")' "$s")")
-  [ "$(jq '.plan.wave2 | length' "$s")" -gt 0 ] && lines+=("${DIM}Wave 2   ${RST} $(jq -r '.plan.wave2 | join(", ")' "$s") ${DIM}(after adding capacity)${RST}")
-  lines+=("${DIM}Duration ${RST} $(ui_duration $((SECONDS - t0)))")
-  lines+=("${DIM}Report   ${RST} ${CC}$(_bc_tilde "$outdir")/report.md${RST}")
-  ui_nl
-  ui_box "Capacity check" "${lines[@]}"
-  ui_hint "$(jq -r '.verdict.summary' "$s")"
-  ui_hint "Files: summary.json · report.md · groups_windows.csv · combined.csv · branches.csv · onboarding_plan.csv · distribution_*.csv · events_hourly.csv"
+  sc_verdict_box "$s" "$outdir"
   SC_LAST_DIR="$outdir"
   return 0
 }
@@ -543,9 +583,12 @@ sc_interactive() {
   done
 
   ui_input SC_BRANCHES "Tracked branches" "$SC_BRANCHES"
-  UI_HINTS=("Windows 1d / 1w / 1m, ending at the end of yesterday" "Pick the last day and the length of the longest window")
-  ui_select k "Collection period" "Last 30 days up to yesterday (recommended)" "Custom" || return
-  if [ "$k" = 1 ]; then
+  UI_HINTS=("Windows 1d / 1w / 1m, ending at the end of yesterday"
+    "Windows 1d / 1w / 1m / 1y — a year of events and jobs: much slower, many more API requests"
+    "Pick the last day and the length of the longest window")
+  ui_select k "Collection period" "Last 30 days up to yesterday (recommended)" "Last 365 days (adds 1y)" "Custom" || return
+  [ "$k" = 1 ] && SC_DAYS=365
+  if [ "$k" = 2 ]; then
     while :; do ui_input SC_UNTIL "Last day included (YYYY-MM-DD, empty = yesterday)" ""; case "$SC_UNTIL" in '' | [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) break ;; esac; ui_warn "Use YYYY-MM-DD"; done
     while :; do ui_input v "Longest window in days" "30"; _bc_is_int "$v" && [ "$v" -ge 1 ] && break; done
     SC_DAYS=$v
@@ -627,7 +670,7 @@ sc_usage() {
 
   ${B}Collection${RST}
     -b, --branches LIST        tracked branches (default: $SC_BRANCHES)
-    -d, --days N               longest window in days (default 30 → windows 1d / 1w / 1m)
+    -d, --days N               longest window in days (default 30 → windows 1d / 1w / 1m; 365 adds 1y)
         --until YYYY-MM-DD     last day included (default: yesterday)
         --tz OFFSET            UTC offset for day/hour buckets (default: system, e.g. +07:00)
         --include-archived     include archived projects
@@ -647,7 +690,8 @@ sc_usage() {
         --safety PCT           safety margin for the recommendation (default 20)
 
   ${B}Output${RST}
-    -o, --out DIR              parent folder (default: reports/) → DIR/sast-capacity_<timestamp>/
+    -o, --out DIR              parent folder (default: reports/) → DIR/<date>_capacity_<groups>/
+        --all-csv              also write the detailed CSVs (per branch, hour/weekday distribution, plan, …)
 
   ${B}Examples${RST}
     ./gitlabbox.sh capacity --onboarded 'A=org/team-a,B=org/team-b' --target 'C=org/team-c'
@@ -683,6 +727,7 @@ sc_cli() {
       --fixed-duration) SC_MEASURED=0; shift ;;
       --safety) _bc_is_int "$2" || { ui_err "--safety must be a number"; return 1; }; SC_SAFETY="$2"; shift 2 ;;
       -o | --out) SC_OUT="$2"; shift 2 ;;
+      --all-csv) SC_ALL_CSV=1; shift ;;
       *) ui_err "Unknown option: $1"; sc_usage; return 1 ;;
     esac
   done

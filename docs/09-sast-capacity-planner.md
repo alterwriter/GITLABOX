@@ -1,6 +1,6 @@
 # 9. SAST Gate Capacity Planner
 
-[← Security](08-security.md) · [README](../README.md)
+[← Security](08-security.md) · [CI Job Detector →](10-ci-job-detector.md)
 
 This tool answers: **"Does a dedicated SAST gate runner have enough capacity for every group we want on it — and if not, how much do we need and who should go first?"**
 
@@ -60,7 +60,7 @@ target:     C=org/team-c, org/team-d
 | SAST jobs *(onboarded only)* | `GET /projects/:id/jobs` | Jobs whose **name** matches `--sast-jobs` (glob, case-insensitive, default `*sast*`). Newest first, stops once it passes the start of the period. |
 | Runner jobs *(optional)* | `GET /runners/:id/jobs` | Every job on the given runner IDs, regardless of project or name. |
 
-Windows: **1d** (the last full day), **1w** (last 7 days), **1m** (last 30 days, or `--days N`). By default the period ends at the end of yesterday in your local UTC offset (`--tz`, `--until`).
+Windows: **1d** (the last full day), **1w** (last 7 days), **1m** (last 30 days), and **1y** (last 365 days) when the period is long enough. Pick **Last 365 days** in the menu or pass `--days 365` to get 1y. Collecting a year of events and jobs takes much longer and makes many more API requests. Any other `--days N` adds an `Nd` window. By default the period ends at the end of yesterday in your local UTC offset (`--tz`, `--until`).
 
 ## How the estimate works
 
@@ -101,7 +101,7 @@ Raw events overcount: a merge done in the UI also creates a push on the target b
   ✔ 1) Groups already on the existing runner (measured, empty = none) › A=org/team-a,S1=org/big/sub-1
   ✔ 2) Groups not onboarded yet (estimated, empty = none) › C=org/team-c, org/team-d
   ✔ Tracked branches › dev,develop,development,main,master
-  ✔ Collection period › Last 30 days up to yesterday (recommended)
+  ✔ Collection period › Last 30 days up to yesterday (recommended)   (or: Last 365 days (adds 1y) · Custom)
   ✔ Dedicated runner capacity (concurrent jobs) › 100
   ✔ Existing runner capacity › 50
   ✔ SAST job names › *sast*
@@ -119,7 +119,7 @@ Then a live view per group (projects → pushes + SAST jobs → merged MRs), fol
   │ Short by  19 jobs                                                          │
   │ Wave 1    D, C                                                             │
   │ Wave 2    E (after adding capacity)                                        │
-  │ Report    ~/GITLABOX/reports/sast-capacity_20261117-101500/report.md       │
+  │ Report    ~/GITLABOX/reports/2026-11-17_1015_capacity_5-groups/report.md   │
   ╰────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -138,7 +138,7 @@ Then a live view per group (projects → pushes + SAST jobs → merged MRs), fol
 | `--target LIST` | — | Groups not onboarded yet — estimated (repeatable) |
 | `-p, --profile NAME` | default profile | Profile with a PAT |
 | `-b, --branches LIST` | `dev,develop,development,main,master` | Tracked branches |
-| `-d, --days N` | `30` | Longest window (windows: 1d, 1w, N days) |
+| `-d, --days N` | `30` | Longest window (30 → 1d, 1w, 1m · 365 → adds 1y) |
 | `--until YYYY-MM-DD` | yesterday | Last day included |
 | `--tz OFFSET` | system | UTC offset for days/hours, e.g. `+07:00` |
 | `--sast-jobs GLOB` | `*sast*` | Job names that count as SAST (comma-separated globs) |
@@ -153,22 +153,28 @@ Then a live view per group (projects → pushes + SAST jobs → merged MRs), fol
 | `--include-archived` | — | Include archived projects |
 | `-w, --workers N` | `6` | Parallel requests |
 | `-o, --out DIR` | `reports/` | Parent folder for the result folder |
+| `--all-csv` | — | Also write the detailed CSVs (see below) |
 
 ## Output files
 
-Everything lands in `reports/sast-capacity_<timestamp>/`:
+Everything lands in `reports/<YYYY-MM-DD_HHMM>_capacity_<groups>/`, for example `2026-11-17_1015_capacity_A+B` or `2026-11-17_1015_capacity_11-groups`. By default there are three files:
 
 | File | Contents |
 |---|---|
+| `report.csv` | **One sheet with every window.** One row per group × window (1d / 1w / 1m / 1y), plus a `TOTAL` row per window for all groups combined. Columns: events, estimated jobs, peak events per hour/minute, peak concurrency, actual SAST jobs, duration, queue, and on the `TOTAL` rows capacity, headroom, fits, recommended capacity. |
 | `report.md` | Ready-to-share report: verdict, scope, per-group tables, combined, onboarded actuals, calibration, distribution, onboarding plan, method & caveats |
-| `summary.json` | Every number above, machine-readable |
-| `groups_windows.csv` | One row per group × window: events, estimated jobs, peaks (hour/minute/concurrency), actual job stats |
+| `summary.json` | Every number, machine-readable |
+
+With `--all-csv` the detailed CSVs are written as well:
+
+| File | Contents |
+|---|---|
+| `groups_windows.csv` | Every per-group metric, including raw (uncalibrated) estimates and P95 / max wait |
 | `combined.csv` | Combined peak per window vs capacity |
 | `branches.csv` | Pushes / commits / merges per group × window × branch |
 | `onboarding_plan.csv` | Target groups in onboarding order with the combined peak after each |
-| `distribution_hour_of_day.csv` | Events per hour of day (0–23) per group |
-| `distribution_weekday.csv` | Events per weekday per group |
-| `events_hourly.csv` | Pushes and merges per clock hour per group — for re-simulating with other assumptions |
+| `distribution_hour_of_day.csv` / `distribution_weekday.csv` | Events per hour of day / weekday per group |
+| `events_hourly.csv` | Pushes and merges per clock hour per group, for re-simulating with other assumptions |
 
 These files contain group, project, and branch names. Keep them out of public repos (`reports/` is git-ignored).
 

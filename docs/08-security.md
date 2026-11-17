@@ -29,12 +29,13 @@
 
 ## Data in reports
 
-Report files (`reports/*.json`, `*.csv`) contain:
+Report files (`reports/*/…`) contain:
 
 - **repository** names and paths, including private/internal ones,
 - **branch** names, which sometimes include ticket numbers or names of unannounced features,
 - contributor **names and emails**. This is personal data.
 - for the capacity planner: **group and project names** and traffic patterns of your organization.
+- for the CI job detector: which repos have (or lack) security jobs. Treat it as sensitive.
 
 Therefore:
 

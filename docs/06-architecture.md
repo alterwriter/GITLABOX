@@ -20,14 +20,15 @@ gitlabbox.sh               entry point
 ├─ source lib/targets.sh
 ├─ source lib/setup.sh
 ├─ source tools/branch-committers.sh
-└─ source tools/sast-capacity.sh       (+ sast-capacity.jq, sast-capacity-report.jq run with jq -f)
+├─ source tools/sast-capacity.sh       (+ sast-capacity.jq, sast-capacity-report.jq run with jq -f)
+└─ source tools/ci-jobs.sh
 ```
 
 What `gitlabbox.sh` does, in order:
 
 1. Resolves the script's real location (symlink-safe) → `GLB_ROOT`, `GLB_SELF`.
 2. Sources all libraries and tools.
-3. If the first argument is `__bc_branch` or `__sc_project`, runs that tool's **worker** and exits, skipping the setup below.
+3. If the first argument is `__bc_branch`, `__sc_project` or `__cj_project`, runs that tool's **worker** and exits, skipping the setup below.
 4. Checks dependencies (`curl`, `jq`).
 5. Creates the temp folder `GLB_TMP` (700) and installs `trap`s for cleanup (EXIT) and Ctrl+C (INT/TERM).
 6. `main "$@"` → dispatches to the menu or a command.
@@ -97,7 +98,7 @@ Colors are disabled automatically when stderr is not a TTY, `NO_COLOR` is set, o
 | Per repo | `bc_scan_repo IDX` |
 | Tables | `_bc_table`, `bc_print_repo_table`, `bc_print_leaderboard` |
 | Report | `bc_run` (merge + write), `bc_to_csv`, `_bc_out_paths` |
-| UI | `bc_interactive`, `_bc_pick_account`, `bc_view_report`, `reports_browse` |
+| UI | `bc_interactive`, `bc_pick_source` (shared repo source picker), `_bc_pick_account`, `bc_view_report`, `reports_browse` |
 | CLI | `bc_cli`, `bc_usage` |
 
 ## Anatomy of a tool: `tools/sast-capacity.sh`
@@ -107,8 +108,20 @@ Colors are disabled automatically when stderr is not a TTY, `NO_COLOR` is set, o
 | Defaults & input | `sc_defaults`, `_sc_add_groups STATUS LIST`, `_sc_glob_re`, `_sc_parse_tz`, `_sc_compute_period` |
 | Collection | `sc_collect_group IDX` (projects → parallel `sc_worker` → merged MRs), `sc_collect_runners`, `_sc_jobs_since` (newest-first paging that stops at the period start) |
 | Analysis | `tools/sast-capacity.jq` — bucket peaks, interval sweep for concurrency, calibration factor, combined projection, greedy onboarding plan, verdict |
-| Output | `sc_write_csvs`, `tools/sast-capacity-report.jq` (Markdown), `sc_print_results` |
+| Output | `sc_write_csvs` (`report.csv`, the rest with `--all-csv`), `tools/sast-capacity-report.jq` (Markdown), `sc_print_results`, `sc_verdict_box`, `sc_view_report` |
 | UI / CLI | `sc_interactive`, `sc_cli`, `sc_usage` |
+
+## Anatomy of a tool: `tools/ci-jobs.sh`
+
+| Part | Functions |
+|---|---|
+| Defaults | `cj_defaults` (calls `bc_defaults`: the repo input is shared with the Branch report) |
+| Input | `BC_TARGETS` → `bc_expand_targets`; interactive via `bc_pick_source` |
+| Worker | `cj_worker IDX`: project → CI lint → latest pipeline jobs/bridges → result. Runs via `xargs -P`, one batch per GitLab host. |
+| Output | `cj_to_csv`, `cj_print_table`, `cj_summary_box`, `cj_view_report` |
+| UI / CLI | `cj_interactive`, `cj_cli`, `cj_usage` |
+
+Report folders for all tools come from `make_report_dir PARENT TOOL SCOPE` in `lib/config.sh`.
 
 ## Adding a new tool
 

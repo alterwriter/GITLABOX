@@ -18,7 +18,7 @@ There are 5 ways to choose which repos to scan, and they can all be combined in 
 | One / several repos | Type them in | `-r REPO` (repeatable / comma-separated) | a plain line |
 | All repos your account can access | All repos my account can access | `--mine`, `-a SCOPE` | `account:SCOPE`, `mine` |
 | A `.txt` file | Bulk from a .txt file | `-f FILE` | — |
-| One group | Every project in a group | `-g GROUP` | `group:PATH` |
+| One or more groups | Every project in one or more groups | `-g GROUP[,GROUP…]` (repeatable) | `group:PATH` |
 | Positional arguments | — | `./gitlabbox.sh branches a/b c/d` | — |
 
 ### How to write a repo
@@ -85,7 +85,7 @@ In the interactive menu you get a preview of the list, and you can filter it bef
 
 ### Group mode
 
-`-g my-org/backend` or `group:my-org/backend` fetches every non-archived project in that group, **including subgroups**. The list can be narrowed with `--repo-filter`, and archived projects can be added with `--include-archived`.
+`-g my-org/backend` or `group:my-org/backend` fetches every non-archived project in that group, **including subgroups**. Several groups work too: `-g 'my-org/backend, my-org/frontend'`, or the same comma-separated list in the menu (**Every project in one or more groups**). A subgroup path (`my-org/backend/payments`) scans only that subgroup. A project found in two of the groups is scanned once. The list can be narrowed with `--repo-filter`, and archived projects can be added with `--include-archived`.
 
 ## Interactive flow
 
@@ -96,7 +96,7 @@ In the interactive menu you get a preview of the list, and you can filter it bef
 | # | Question | Choices |
 |---|---|---|
 | 1 | Which connection? | Only shown when there is more than one profile (or an `env` profile) |
-| 2 | Where do the repos come from? | Type them in · All repos my account can access · .txt file · Group |
+| 2 | Where do the repos come from? | Type them in · All repos my account can access · .txt file · One or more groups (comma-separated) |
 | 3 | Count commits since when? | Full history · 30 · 90 · 180 · 365 days · Custom |
 | 4 | Advanced options | **Use defaults** or **Customize**: branch filter, author/committer, commit cap (1,000 / 5,000 / 20,000 / no limit), worker count (1–32) |
 | 5 | Report format | JSON · CSV · JSON + CSV |
@@ -133,8 +133,8 @@ When more than one repo is scanned, you also get a **cross-repo leaderboard** at
   │ Branches 36 analyzed                                                        │
   │ Range    since 2026-07-21 (90 days)                                         │
   │ Duration 1m 12s                                                             │
-  │ JSON     reports/branch-committers_bulk-12repos_20261019-101500.json        │
-  │ CSV      reports/branch-committers_bulk-12repos_20261019-101500.csv         │
+  │ JSON     reports/2026-10-19_1015_branches_12-repos/report.json              │
+  │ CSV      reports/2026-10-19_1015_branches_12-repos/report.csv               │
   ╰─────────────────────────────────────────────────────────────────────────────╯
 
   ✖ team/legacy-app — 403 Forbidden — token lacks scope (read_api required) or your role is too low.
@@ -170,7 +170,7 @@ By default the on-screen table only shows the top 10 branches per repo (change i
 |---|---|
 | `-r, --repo REPO` | Path / ID / URL. Repeatable, or several at once separated by commas/spaces. |
 | `-f, --file FILE` | `.txt` file, one repo per line |
-| `-g, --group GROUP` | Every project in the group + subgroups |
+| `-g, --group LIST` | Every project in these groups + subgroups (comma-separated, repeatable) |
 | `-a, --account SCOPE` | Every project your account can access: `member` · `owned` · `reporter` · `developer` · `maintainer` · `all` |
 | `--mine` | Shorthand for `--account member` |
 | `--repo-filter GLOB` | Filter `-g` / `-a` results, comma-separated globs |
@@ -199,7 +199,7 @@ By default the on-screen table only shows the top 10 branches per repo (change i
 | Option | Default | Description |
 |---|---|---|
 | `-F, --format FMT` | `json` | `json` · `csv` · `both` |
-| `-o, --out PATH` | `reports/` | A folder, a file name (`x.json` / `x.csv`, the other format uses the same base name), or `-` for stdout (one format only) |
+| `-o, --out PATH` | `reports/` | A parent folder (each scan gets its own sub-folder), a file name (`x.json` / `x.csv`, the other format uses the same base name), or `-` for stdout (one format only) |
 | `--rows N` | `10` | Table rows per repo on screen |
 
 Long options also accept `=`, e.g. `--format=csv` or `--since-days=30`.
@@ -213,9 +213,19 @@ Long options also accept `=`, e.g. `--format=csv` or `--since-days=30`.
 
 ### Output file names
 
-`branch-committers_<slug>_<YYYYmmdd-HHMMSS>.{json,csv}`, where:
-- `<slug>` = the repo path with `/` replaced by `_` when there is one repo, e.g. `my-group_my-app`,
-- `<slug>` = `bulk-<N>repos` when there are several repos.
+Every scan gets its own folder, `reports/<YYYY-MM-DD_HHMM>_branches_<scope>/`, containing `report.json` and/or `report.csv`. `<scope>` is short and says what was scanned:
+
+| Scanned | Folder |
+|---|---|
+| one repo `my-group/my-app` | `2026-10-19_1015_branches_my-app` |
+| one group `my-org/backend` | `2026-10-19_1015_branches_backend` |
+| two groups | `2026-10-19_1015_branches_backend+frontend` |
+| three or more groups | `2026-10-19_1015_branches_5-groups` |
+| all your repos | `2026-10-19_1015_branches_my-repos` |
+| a `.txt` file `team-x.txt` | `2026-10-19_1015_branches_team-x` |
+| anything else | `2026-10-19_1015_branches_12-repos` |
+
+Names are cut to 24 characters. A second scan in the same minute gets `_2`. The SAST Gate Capacity Planner (`…_capacity_<groups>`) and the CI Job Detector (`…_ci-jobs_<scope>`) follow the same pattern.
 
 ### Exit codes
 
@@ -256,7 +266,7 @@ Long options also accept `=`, e.g. `--format=csv` or `--since-days=30`.
 
 ## Viewing saved reports
 
-The **📊 View saved reports** menu, or `./gitlabbox.sh reports`, lists the 15 most recent JSON files in `reports/`. Pick one and its per-repo tables and leaderboard are shown again without calling the API.
+The **📊 View saved reports** menu, or `./gitlabbox.sh reports`, lists the 20 most recent reports in `reports/` from all tools (🌿 branches, 🏃 capacity, 🔎 CI jobs). Pick one and its tables are shown again without calling the API.
 
 ## Performance tips
 

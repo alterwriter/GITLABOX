@@ -190,7 +190,7 @@ Example:
 ## `jq` recipes
 
 ```bash
-R=reports/branch-committers_bulk-12repos_20261019-101500.json
+R=reports/2026-10-19_1015_branches_12-repos/report.json
 
 # per-repo summary
 jq -r '.repositories[] | [.project, .branch_count_total, .unique_committers, (.error // "ok")] | @tsv' "$R"
