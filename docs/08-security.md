@@ -1,6 +1,6 @@
 # 8. Security
 
-[← Troubleshooting](07-troubleshooting.md) · [README](../README.md)
+[← Troubleshooting](07-troubleshooting.md) · [SAST Gate Capacity Planner →](09-sast-capacity-planner.md)
 
 ## Summary
 
@@ -34,6 +34,7 @@ Report files (`reports/*.json`, `*.csv`) contain:
 - **repository** names and paths, including private/internal ones,
 - **branch** names, which sometimes include ticket numbers or names of unannounced features,
 - contributor **names and emails**. This is personal data.
+- for the capacity planner: **group and project names** and traffic patterns of your organization.
 
 Therefore:
 

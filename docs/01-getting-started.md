@@ -66,11 +66,12 @@ Symlinks are fine. The script resolves its real location to find `lib/` and `too
 | `./gitlabbox.sh profiles` | Table of all connection profiles |
 | `./gitlabbox.sh whoami [-p PROFILE]` | Test the connection + show user & token info |
 | `./gitlabbox.sh branches [options]` | Branch & Committer Report in flag mode (see the [tool guide](03-branch-committer-report.md)) |
+| `./gitlabbox.sh capacity [options]` | SAST Gate Capacity Planner in flag mode (see the [planner guide](09-sast-capacity-planner.md)) |
 | `./gitlabbox.sh reports` | Pick and re-display a saved JSON report |
 | `./gitlabbox.sh --help` | Help |
 | `./gitlabbox.sh --version` | Version |
 
-Aliases: `branches` = `branch-committers` = `bc`, `profiles` = `profile`.
+Aliases: `branches` = `branch-committers` = `bc`, `capacity` = `sast-capacity` = `sc`, `profiles` = `profile`.
 
 ## Keyboard navigation
 

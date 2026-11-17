@@ -2,7 +2,10 @@
 
 An interactive CLI toolbox for GitLab, written in pure **Bash**. Works with **GitLab.com (SaaS)**, **self-hosted GitLab (CE/EE)**, and **GitLab Dedicated**.
 
-The first tool in the box is the **Branch & Committer Report**. It lists every branch in one or many repositories, counts the **unique committers per branch**, sorts them from busiest to quietest, and exports the result to **JSON** or **CSV**.
+Tools in the box:
+
+- **Branch & Committer Report** — lists every branch in one or many repositories, counts the **unique committers per branch**, sorts them from busiest to quietest, and exports the result to **JSON** or **CSV**.
+- **SAST Gate Capacity Planner** — collects push/merge traffic per group, measures the SAST jobs already running for onboarded groups, calibrates the estimate, and checks whether a dedicated runner has enough capacity for every group (with an onboarding order when it doesn't).
 
 ```
    ██████╗ ██╗████████╗██╗      █████╗ ██████╗ ██████╗  ██████╗ ██╗  ██╗
@@ -16,6 +19,7 @@ The first tool in the box is the **Branch & Committer Report**. It lists every b
 
   ? What do you want to do? (↑/↓ · Enter · q to cancel)
   ❯ 🌿  Branch & Committer Report
+    🏃  SAST Gate Capacity Planner
     📊  View saved reports
     🔌  Set up a GitLab connection
     🗂   Manage profiles
@@ -51,6 +55,7 @@ Flag mode examples:
 ./gitlabbox.sh branches --mine -d 90 -F both               # all your repos, last 90 days
 ./gitlabbox.sh branches -f repos.txt -b 'main,release/*'   # bulk from a file
 ./gitlabbox.sh branches -g my-org/backend -o - | jq .summary
+./gitlabbox.sh capacity --onboarded 'A=org/team-a' --target 'B=org/team-b,org/team-c' --capacity 100
 ```
 
 Sample output:
@@ -79,6 +84,7 @@ Sample output:
 | [Architecture & development](docs/06-architecture.md) | Code layout, library reference, adding a new tool, testing |
 | [Troubleshooting](docs/07-troubleshooting.md) | Common errors and fixes |
 | [Security](docs/08-security.md) | Security model, token storage, data in reports |
+| [SAST Gate Capacity Planner](docs/09-sast-capacity-planner.md) | Traffic collection, calibration against actual SAST jobs, runner capacity verdict, onboarding order |
 
 ## Layout
 
@@ -92,7 +98,10 @@ GITLABOX/
 │   ├── targets.sh             # repo input parsing (path / ID / URL / SSH / group: / account:)
 │   └── setup.sh               # connection wizard & profile management
 ├── tools/
-│   └── branch-committers.sh   # Tool #1: Branch & Committer Report
+│   ├── branch-committers.sh   # Tool #1: Branch & Committer Report
+│   ├── sast-capacity.sh       # Tool #2: SAST Gate Capacity Planner (collection, UI, CLI)
+│   ├── sast-capacity.jq       #          analysis (peaks, calibration, verdict, plan)
+│   └── sast-capacity-report.jq #         Markdown report
 ├── docs/                      # detailed documentation
 ├── repos.example.txt          # repo list template
 └── reports/                   # default output (git-ignored)
