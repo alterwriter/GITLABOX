@@ -18,10 +18,14 @@ No group names are built in. You type them in every run.
 
 Two lists, both comma-separated:
 
-| List | Meaning |
-|---|---|
-| **Onboarded** | Groups whose SAST jobs already run on the existing runner. Their actual jobs are measured and used to calibrate the estimate. They are assumed to move to the dedicated runner. |
-| **Target** | Groups not onboarded yet. Their load is estimated from traffic × the calibration factor. |
+Both lists are collected and both count toward the combined total on the dedicated runner. The only difference is what can be measured. Put each group in **one** list.
+
+| List (menu prompt / flag) | Collected | Load on the dedicated runner comes from |
+|---|---|---|
+| **1) Already on the existing runner** (`--onboarded`) | Traffic **plus** actual SAST jobs: duration, utilization, queue | Their **measured** jobs. They also provide the calibration factor. |
+| **2) Not onboarded yet** (`--target`) | Traffic only (no SAST jobs exist yet) | An **estimate**: events × jobs per event × calibration factor |
+
+Without at least one group in list 1 there is nothing to calibrate against, so estimates stay uncalibrated (factor 1).
 
 Each entry is `LABEL=path/to/group` or just `path/to/group` (the path becomes the label). Group URLs work too.
 
@@ -80,8 +84,8 @@ Raw events overcount: a merge done in the UI also creates a push on the target b
 
 ```
   ✔ Which connection? › work · gitlab.example.com
-  ✔ Groups already onboarded (existing runner, empty = none) › A=org/team-a,S1=org/big/sub-1
-  ✔ Target groups (not onboarded yet, empty = none) › C=org/team-c, org/team-d
+  ✔ 1) Groups already on the existing runner (measured, empty = none) › A=org/team-a,S1=org/big/sub-1
+  ✔ 2) Groups not onboarded yet (estimated, empty = none) › C=org/team-c, org/team-d
   ✔ Tracked branches › dev,develop,development,main,master
   ✔ Collection period › Last 30 days up to yesterday (recommended)
   ✔ Dedicated runner capacity (concurrent jobs) › 100
@@ -116,8 +120,8 @@ Then a live view per group (projects → pushes + SAST jobs → merged MRs), fol
 
 | Option | Default | Description |
 |---|---|---|
-| `--onboarded LIST` | — | Onboarded groups (repeatable) |
-| `--target LIST` | — | Target groups (repeatable) |
+| `--onboarded LIST` | — | Groups already on the existing runner — measured (repeatable) |
+| `--target LIST` | — | Groups not onboarded yet — estimated (repeatable) |
 | `-p, --profile NAME` | default profile | Profile with a PAT |
 | `-b, --branches LIST` | `dev,develop,development,main,master` | Tracked branches |
 | `-d, --days N` | `30` | Longest window (windows: 1d, 1w, N days) |

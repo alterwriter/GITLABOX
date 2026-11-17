@@ -62,9 +62,19 @@ _sc_add_groups() {
       ui_err "Invalid group: $item"; return 1
     fi
     path="$T_PATH"
+    [ -n "$T_HOST" ] && path="${path#groups/}"   # https://host/groups/org/team (older group URL form)
     [ -z "$name" ] && name="$path"
     for g in "${SC_GROUPS[@]}"; do
-      if [ "$(printf '%s' "$g" | cut -f2)" = "$name" ]; then ui_err "Duplicate group label: $name"; return 1; fi
+      if [ "$(printf '%s' "$g" | cut -f2)" = "$name" ] || [ "$(printf '%s' "$g" | cut -f3)" = "$path" ]; then
+        local what="'$name'"
+        [ "$(printf '%s' "$g" | cut -f2)" != "$name" ] && what="'$path' (already listed as '$(printf '%s' "$g" | cut -f2)')"
+        if [ "$(printf '%s' "$g" | cut -f1)" = "$status" ]; then
+          ui_err "$what is listed twice in the same list."
+        else
+          ui_err "$what is already in the $(printf '%s' "$g" | cut -f1 | sed 's/onboarded/measured (already on the existing runner)/; s/target/estimated (not onboarded yet)/') list. Put each group in one list only."
+        fi
+        return 1
+      fi
     done
     SC_GROUPS+=("$status	$name	$path")
   done < <(printf '%s\n' "$2" | tr ',' '\n')
@@ -480,14 +490,16 @@ sc_interactive() {
     return
   fi
 
-  ui_hint "Groups: comma-separated, either LABEL=path/to/group or just path/to/group."
-  ui_hint "Subgroups work too: write the subgroup path to collect only that subgroup."
+  ui_hint "Both lists are collected and counted in the combined total. Put each group in ONE list:"
+  ui_hint "  1) already on the existing runner → traffic + actual SAST jobs are measured (used to calibrate)"
+  ui_hint "  2) not onboarded yet            → traffic only, SAST load is estimated"
+  ui_hint "Format: comma-separated LABEL=path/to/group or path/to/group (subgroup paths collect only that subgroup)."
   while :; do
     SC_GROUPS=()
-    ui_input v "Groups already onboarded (existing runner, empty = none)" ""
+    ui_input v "1) Groups already on the existing runner (measured, empty = none)" ""
     _sc_add_groups onboarded "$v" || continue
     n_onb=${#SC_GROUPS[@]}
-    ui_input v "Target groups (not onboarded yet, empty = none)" ""
+    ui_input v "2) Groups not onboarded yet (estimated, empty = none)" ""
     _sc_add_groups target "$v" || continue
     n_tgt=$((${#SC_GROUPS[@]} - n_onb))
     [ "${#SC_GROUPS[@]}" -gt 0 ] && break
@@ -569,8 +581,10 @@ sc_usage() {
   ${B}gitlabbox.sh capacity${RST} — $TOOL_SC_NAME
 
   ${B}Groups${RST} (comma-separated, repeatable; LABEL=path or just path; subgroup paths allowed)
-        --onboarded LIST       groups already running SAST on the existing runner
-        --target LIST          groups not onboarded yet
+        --onboarded LIST       groups already on the existing runner: traffic + actual SAST
+                               jobs are measured and used to calibrate the estimate
+        --target LIST          groups not onboarded yet: traffic only, SAST load estimated
+                               (both lists count toward the combined total; one list per group)
 
   ${B}Connection${RST}
     -p, --profile NAME         profile with a PAT (read_api, Reporter on every group)
