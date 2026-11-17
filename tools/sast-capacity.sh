@@ -48,9 +48,11 @@ sc_defaults() {
 _sc_trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; printf '%s' "${s%"${s##*[![:space:]]}"}"; }
 _sc_is_num() { case "$1" in '' | *[!0-9.]* | *.*.*) return 1 ;; *) return 0 ;; esac; }
 
-# _sc_add_groups STATUS "LABEL=path, path2, ..." → appends to SC_GROUPS, returns 1 on bad input
+# _sc_add_groups STATUS "LABEL=path, path2, ..." → appends to SC_GROUPS ("status<TAB>label<TAB>path1|path2"), returns 1 on bad input
+#   - the same LABEL with different paths in one list = one group spread over several locations (merged)
+#   - the same path twice, a label in both lists, or a parent + its own subgroup under different labels → rejected
 _sc_add_groups() {
-  local status="$1" item name path g
+  local status="$1" item name path i g gs gn gp p merged
   while IFS= read -r item; do
     item=$(_sc_trim "$item")
     [ -z "$item" ] && continue
@@ -64,19 +66,36 @@ _sc_add_groups() {
     path="$T_PATH"
     [ -n "$T_HOST" ] && path="${path#groups/}"   # https://host/groups/org/team (older group URL form)
     [ -z "$name" ] && name="$path"
-    for g in "${SC_GROUPS[@]}"; do
-      if [ "$(printf '%s' "$g" | cut -f2)" = "$name" ] || [ "$(printf '%s' "$g" | cut -f3)" = "$path" ]; then
-        local what="'$name'"
-        [ "$(printf '%s' "$g" | cut -f2)" != "$name" ] && what="'$path' (already listed as '$(printf '%s' "$g" | cut -f2)')"
-        if [ "$(printf '%s' "$g" | cut -f1)" = "$status" ]; then
-          ui_err "$what is listed twice in the same list."
-        else
-          ui_err "$what is already in the $(printf '%s' "$g" | cut -f1 | sed 's/onboarded/measured (already on the existing runner)/; s/target/estimated (not onboarded yet)/') list. Put each group in one list only."
+    merged=-1
+    for i in "${!SC_GROUPS[@]}"; do
+      g="${SC_GROUPS[$i]}"
+      gs=$(printf '%s' "$g" | cut -f1); gn=$(printf '%s' "$g" | cut -f2); gp=$(printf '%s' "$g" | cut -f3)
+      while IFS= read -r p; do
+        if [ "$p" = "$path" ]; then
+          ui_err "'$path' is listed twice$([ "$gn" != "$name" ] && printf " (already as '%s')" "$gn")."; return 1
         fi
-        return 1
+        if [ "$gn" != "$name" ]; then
+          case "$path/" in "$p"/*)
+            ui_err "'$path' ($name) is inside '$p' ($gn) — its projects would be counted twice. Remove one of them."; return 1 ;;
+          esac
+          case "$p/" in "$path"/*)
+            ui_err "'$p' ($gn) is inside '$path' ($name) — its projects would be counted twice. Remove one of them."; return 1 ;;
+          esac
+        fi
+      done < <(printf '%s\n' "$gp" | tr '|' '\n')
+      if [ "$gn" = "$name" ]; then
+        if [ "$gs" != "$status" ]; then
+          ui_err "'$name' is already in the $(printf '%s' "$gs" | sed 's/onboarded/measured (already on the existing runner)/; s/target/estimated (not onboarded yet)/') list. Put each group in one list only."
+          return 1
+        fi
+        merged=$i
       fi
     done
-    SC_GROUPS+=("$status	$name	$path")
+    if [ "$merged" -ge 0 ]; then
+      SC_GROUPS[$merged]="${SC_GROUPS[$merged]}|$path"
+    else
+      SC_GROUPS+=("$status	$name	$path")
+    fi
   done < <(printf '%s\n' "$2" | tr ',' '\n')
   return 0
 }
@@ -190,7 +209,10 @@ sc_collect_group() {
   status=$(printf '%s' "${SC_GROUPS[$gi]}" | cut -f1)
   name=$(printf '%s' "${SC_GROUPS[$gi]}" | cut -f2)
   path=$(printf '%s' "${SC_GROUPS[$gi]}" | cut -f3)
-  enc=$(_uri "$path")
+  local paths=() gpth perr="" np
+  while IFS= read -r gpth; do paths+=("$gpth"); done < <(printf '%s\n' "$path" | tr '|' '\n')
+  np=${#paths[@]}
+  path=$(printf '%s' "$path" | sed 's/|/, /g')
   gdir="$SC_WORK/g$gi"
   mkdir -p "$gdir/p"
   [ "$SC_INCLUDE_ARCHIVED" = 1 ] && arch=""
@@ -198,8 +220,18 @@ sc_collect_group() {
   printf '\n  %s[%d/%d]%s %s%s%s %s(%s · %s)%s\n' "$DIM" $((gi + 1)) "${#SC_GROUPS[@]}" "$RST" "$B" "$name" "$RST" \
     "$DIM" "$status" "$path" "$RST" >&2
 
-  ui_spin_start "Listing projects" "$gdir/count"
-  if ! api_get_all "/groups/$enc/projects?include_subgroups=true&with_shared=false&simple=true$arch" "$gdir/all.json" 0 "$gdir/count"; then
+  ui_spin_start "Listing projects$([ "$np" -gt 1 ] && printf ' (%s locations)' "$np")" "$gdir/count"
+  : >"$gdir/all.jsonl"
+  for gpth in "${paths[@]}"; do
+    if api_get_all "/groups/$(_uri "$gpth")/projects?include_subgroups=true&with_shared=false&simple=true$arch" "$gdir/one.json" 0 "$gdir/count"; then
+      jq -c '.[]' "$gdir/one.json" >>"$gdir/all.jsonl"
+    else
+      perr="$gpth: $API_ERROR"; break
+    fi
+  done
+  jq -s 'unique_by(.id)' "$gdir/all.jsonl" >"$gdir/all.json"
+  if [ -n "$perr" ]; then
+    API_ERROR="$perr"
     ui_spin_stop 1 "Cannot list projects: $API_ERROR"
     jq -nc --arg n "$name" --arg p "$path" --arg s "$status" --arg e "$API_ERROR" \
       '{name: $n, path: $p, status: $s, projects_total: 0, projects_candidate: 0, error: $e}' >>"$SC_WORK/groups.jsonl"
@@ -231,18 +263,22 @@ sc_collect_group() {
   fi
 
   ui_spin_start "Merged MRs on tracked branches"
-  : >"$gdir/merges"
+  : >"$gdir/merges.raw"
   nerr=""
-  while IFS= read -r b; do
-    if api_get_all "/groups/$enc/merge_requests?state=merged&scope=all&target_branch=$(_uri "$b")&updated_after=$(_uri "$SC_START_ISO")" "$gdir/mr.json"; then
-      jq -c --arg g "$name" --argjson s "$SC_START" --argjson e "$SC_END" "$SC_JQ_TS"'
-        .[] | select(.merged_at != null)
-        | {g: $g, type: "merge", t: (.merged_at | ts), branch: .target_branch, project: .project_id, commits: 0}
-        | select(.t >= $s and .t < $e)' "$gdir/mr.json" >>"$gdir/merges"
-    else
-      nerr="$API_ERROR"
-    fi
-  done < <(printf '%s' "$SC_BRANCHES_JSON" | jq -r '.[]')
+  for gpth in "${paths[@]}"; do
+    while IFS= read -r b; do
+      if api_get_all "/groups/$(_uri "$gpth")/merge_requests?state=merged&scope=all&target_branch=$(_uri "$b")&updated_after=$(_uri "$SC_START_ISO")" "$gdir/mr.json"; then
+        jq -c --arg g "$name" --argjson s "$SC_START" --argjson e "$SC_END" "$SC_JQ_TS"'
+          .[] | select(.merged_at != null)
+          | {g: $g, type: "merge", t: (.merged_at | ts), branch: .target_branch, project: .project_id, commits: 0, mr: (.id // null)}
+          | select(.t >= $s and .t < $e)' "$gdir/mr.json" >>"$gdir/merges.raw"
+      else
+        nerr="$gpth: $API_ERROR"
+      fi
+    done < <(printf '%s' "$SC_BRANCHES_JSON" | jq -r '.[]')
+  done
+  # one MR can be returned for several locations only if they overlap; dedupe anyway
+  jq -c -s 'unique_by([.mr, .project, .t, .branch])[] | del(.mr)' "$gdir/merges.raw" /dev/null >"$gdir/merges" 2>/dev/null || : >"$gdir/merges"
   nm=$(sed -n '$=' "$gdir/merges"); nm=${nm:-0}
   if [ -n "$nerr" ]; then ui_spin_stop 1 "Merged MRs: $nerr"; else ui_spin_stop 0 "$nm merged MRs"; fi
 

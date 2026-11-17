@@ -29,7 +29,21 @@ Without at least one group in list 1 there is nothing to calibrate against, so e
 
 Each entry is `LABEL=path/to/group` or just `path/to/group` (the path becomes the label). Group URLs work too.
 
-**Subgroups:** write the subgroup's path (`org/big-group/sub-1`) to collect only that subgroup and its children, not the whole parent group.
+**Subgroups:** write the full path from the top-level group (`org/big-group/sub-1`) to collect only that subgroup and its own subgroups, not the whole parent group. Any depth works.
+
+**One group in several locations:** repeat the same label with each path, in the same list. The locations are merged into one group (projects and MRs found in more than one location are counted once):
+
+```text
+S1=org/division-a/dept-x/sub-1, S1=org/division-b/dept-y/sub-1
+```
+
+Rejected before anything is fetched:
+
+| Input | Why |
+|---|---|
+| the same path twice | duplicate |
+| the same label in both lists | a group is either measured or estimated |
+| a parent and its own subgroup under **different** labels (`P=org/a, C=org/a/sub`) | the subgroup's projects would be counted twice |
 
 ```text
 onboarded:  A=org/team-a, B=org/team-b, S1=org/big/sub-1, S2=org/big/sub-2
