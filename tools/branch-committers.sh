@@ -530,6 +530,7 @@ reports_browse() {
         case "$(jq -r '.tool' "$f" 2>/dev/null)" in
           ci-jobs) labels+=("🔎 $d $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.found) found · \(.summary.missing) missing"' "$f" 2>/dev/null)$RST") ;;
           deps) labels+=("📦 $d $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.used) using · \(.options.keywords | join(", "))"' "$f" 2>/dev/null)$RST") ;;
+          sast-gate) labels+=("🚦 $d $DIM· $(jq -r '"\(.groups | length) groups · \(.totals.gate_pipelines) pipelines · \(.totals.break) break (\(.totals.break_rate // 0)%)"' "$f" 2>/dev/null)$RST") ;;
           *) labels+=("🌿 $d $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.branches_analyzed) branches"' "$f" 2>/dev/null)$RST") ;;
         esac ;;
       *) labels+=("🌿 $(basename "$f") $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.branches_analyzed) branches"' "$f" 2>/dev/null)$RST") ;;
@@ -542,6 +543,7 @@ reports_browse() {
       case "$(jq -r '.tool' "${files[$k]}")" in
         ci-jobs) cj_view_report "${files[$k]}" ;;
         deps) dp_view_report "${files[$k]}" ;;
+        sast-gate) sg_view_report "${files[$k]}" ;;
         *) bc_view_report "${files[$k]}" ;;
       esac ;;
     *) bc_view_report "${files[$k]}" ;;

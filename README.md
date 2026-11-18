@@ -6,6 +6,7 @@ Tools in the box:
 
 - **Branch & Committer Report** — lists every branch in one or many repositories, counts the **unique committers per branch**, sorts them from busiest to quietest, and exports the result to **JSON** or **CSV**.
 - **SAST Gate Capacity Planner** — collects push/merge traffic per group, measures the SAST jobs already running for onboarded groups, calibrates the estimate, and checks whether a dedicated runner has enough capacity for every group (with an onboarding order when it doesn't).
+- **SAST Gate Pass/Break Recap** — per group: how many pipelines passed or broke on the SAST gate (e.g. `sast:gate`), why they broke (blocked by the gate vs. runner / timeout), job and queue time, runner peak, plus a rollout crosscheck (repos that ran the gate vs. pipelines without it). One recap sheet, a per-pipeline sheet, and a copy-paste text.
 - **Dependency Finder** — finds which repos use a library matching your keywords (e.g. `sdk` → `aws-sdk`, `@aws-sdk/client-s3`, `firebase-admin-sdk`), with versions, by reading the dependency manifests (npm, PyPI, Go, Maven/Gradle, NuGet, Composer, Gems, Cargo, pub, …) on the default or a chosen branch.
 - **CI Job Detector** — checks, for every repo in your repos / groups / account, whether a job you name (e.g. `sast:gate`, `*sast*`) is defined in its CI config and whether it ran in the latest pipeline.
 
@@ -22,6 +23,7 @@ Tools in the box:
   ? What do you want to do? (↑/↓ · Enter · q to cancel)
   ❯ 🌿  Branch & Committer Report
     🏃  SAST Gate Capacity Planner
+    🚦  SAST Gate Pass/Break Recap
     🔎  CI Job Detector
     📦  Dependency Finder
     📊  View saved reports
@@ -61,6 +63,7 @@ Flag mode examples:
 ./gitlabbox.sh branches -g my-org/backend -o - | jq .summary
 ./gitlabbox.sh branches -g 'my-org/backend,my-org/frontend'  # several groups
 ./gitlabbox.sh capacity --onboarded 'A=org/team-a' --target 'B=org/team-b,org/team-c' --capacity 100
+./gitlabbox.sh gate -g 'A=org/team-a,B=org/team-b' --hours 24 --recap  # SAST gate passed vs break
 ./gitlabbox.sh cijobs -g my-org -j 'sast:gate,*sast*'        # which repos run a SAST job?
 ./gitlabbox.sh deps -g my-org -k 'sdk,firebase' --ref master # which repos use these libraries?
 ```
@@ -94,6 +97,7 @@ Sample output:
 | [SAST Gate Capacity Planner](docs/09-sast-capacity-planner.md) | Traffic collection, calibration against actual SAST jobs, runner capacity verdict, onboarding order |
 | [CI Job Detector](docs/10-ci-job-detector.md) | Defined vs ran per repo, job name matching, results, output |
 | [Dependency Finder](docs/11-dependency-finder.md) | Library keyword matching, manifests read, optional code search, results, output |
+| [SAST Gate Pass/Break Recap](docs/12-sast-gate-recap.md) | Passed vs break per group, break reasons, job time, runner peak, rollout crosscheck, recap text |
 
 ## Layout
 
@@ -111,6 +115,9 @@ GITLABOX/
 │   ├── sast-capacity.sh       # Tool #2: SAST Gate Capacity Planner (collection, UI, CLI)
 │   ├── sast-capacity.jq       #          analysis (peaks, calibration, verdict, plan)
 │   ├── sast-capacity-report.jq #         Markdown report
+│   ├── sast-gate.sh           # Tool #5: SAST Gate Pass/Break Recap (collection, UI, CLI)
+│   ├── sast-gate.jq           #          analysis (results per pipeline, per group / day / repo)
+│   ├── sast-gate-recap.jq     #          copy-paste recap text
 │   ├── ci-jobs.sh             # Tool #3: CI Job Detector
 │   ├── deps.sh                # Tool #4: Dependency Finder (collection, UI, CLI)
 │   └── deps-parse.jq          #          manifest parsers

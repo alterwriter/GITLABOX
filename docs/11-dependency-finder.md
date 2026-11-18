@@ -1,6 +1,6 @@
 # 11. Dependency Finder
 
-[← CI Job Detector](10-ci-job-detector.md) · [README](../README.md)
+[← CI Job Detector](10-ci-job-detector.md) · [SAST Gate Pass/Break Recap →](12-sast-gate-recap.md)
 
 This tool answers: **"Which of our repos use a library like *X*, and which version?"**
 

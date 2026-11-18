@@ -8,6 +8,7 @@
 #   ./gitlabbox.sh whoami [-p P]   test connection + token info
 #   ./gitlabbox.sh branches ...    Branch & Committer Report (flag mode, for CI)
 #   ./gitlabbox.sh capacity ...    SAST Gate Capacity Planner (flag mode, for CI)
+#   ./gitlabbox.sh gate ...        SAST Gate Pass/Break Recap (flag mode, for CI)
 #
 # Requires: bash 3.2+, curl, jq 1.6+
 
@@ -44,6 +45,8 @@ export GLB_ROOT GLB_SELF GLB_VERSION GLB_TIMEOUT
 . "$GLB_ROOT/tools/ci-jobs.sh"
 # shellcheck source=tools/deps.sh
 . "$GLB_ROOT/tools/deps.sh"
+# shellcheck source=tools/sast-gate.sh
+. "$GLB_ROOT/tools/sast-gate.sh"
 
 # Internal worker (invoked by xargs -P); skips the setup/traps below.
 if [ "${1:-}" = __bc_branch ]; then
@@ -60,6 +63,10 @@ if [ "${1:-}" = __cj_project ]; then
 fi
 if [ "${1:-}" = __dp_project ]; then
   dp_worker "$2"
+  exit 0
+fi
+if [ "${1:-}" = __sg_project ]; then
+  sg_worker "$2"
   exit 0
 fi
 
@@ -100,6 +107,7 @@ usage() {
     ./gitlabbox.sh whoami [-p P]   test connection + token info
     ./gitlabbox.sh branches -h     $TOOL_BC_NAME (flag mode, for scripts/CI)
     ./gitlabbox.sh capacity -h     $TOOL_SC_NAME (flag mode, for scripts/CI)
+    ./gitlabbox.sh gate -h         $TOOL_SG_NAME (flag mode, for scripts/CI)
     ./gitlabbox.sh cijobs -h       $TOOL_CJ_NAME (flag mode, for scripts/CI)
     ./gitlabbox.sh deps -h         $TOOL_DP_NAME (flag mode, for scripts/CI)
     ./gitlabbox.sh reports         view saved reports
@@ -146,6 +154,7 @@ interactive_main() {
     ui_nl
     UI_HINTS=("List branches + committer count per repo (single / all your repos / .txt / group) → JSON/CSV"
       "Push/merge traffic + actual SAST jobs per group → does a dedicated runner have enough capacity?"
+      "Per group: how many pipelines passed or broke on the SAST gate, why, how long it took"
       "Is a job like sast:gate defined in each repo's pipeline — and did it run? (repos / groups / all your repos)"
       "Which repos use a library matching your keywords (e.g. sdk, firebase)? Reads manifests on main/master"
       "Re-open a report you generated earlier"
@@ -156,6 +165,7 @@ interactive_main() {
     ui_select k "What do you want to do?" \
       "🌿  $TOOL_BC_NAME" \
       "🏃  $TOOL_SC_NAME" \
+      "🚦  $TOOL_SG_NAME" \
       "🔎  $TOOL_CJ_NAME" \
       "📦  $TOOL_DP_NAME" \
       "📊  View saved reports" \
@@ -166,13 +176,14 @@ interactive_main() {
     case "$k" in
       0) bc_interactive ;;
       1) sc_interactive ;;
-      2) cj_interactive ;;
-      3) dp_interactive ;;
-      4) reports_browse; ui_pause ;;
-      5) setup_wizard; ui_pause ;;
-      6) profiles_manage ;;
-      7) whoami_cmd; ui_pause ;;
-      8) exit 0 ;;
+      2) sg_interactive ;;
+      3) cj_interactive ;;
+      4) dp_interactive ;;
+      5) reports_browse; ui_pause ;;
+      6) setup_wizard; ui_pause ;;
+      7) profiles_manage ;;
+      8) whoami_cmd; ui_pause ;;
+      9) exit 0 ;;
     esac
   done
 }
@@ -185,6 +196,7 @@ main() {
     whoami) shift; whoami_cmd "$@" ;;
     branches | branch-committers | bc) shift; bc_cli "$@" ;;
     capacity | sast-capacity | sc) shift; sc_cli "$@" ;;
+    gate | sast-gate | sg) shift; sg_cli "$@" ;;
     cijobs | ci-jobs | cj) shift; cj_cli "$@" ;;
     deps | dependencies | dp) shift; dp_cli "$@" ;;
     reports) reports_browse ;;
