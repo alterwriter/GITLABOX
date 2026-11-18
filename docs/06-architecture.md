@@ -22,6 +22,7 @@ gitlabbox.sh               entry point
 ├─ source tools/branch-committers.sh
 ├─ source tools/sast-capacity.sh       (+ sast-capacity.jq, sast-capacity-report.jq run with jq -f)
 ├─ source tools/sast-gate.sh           (+ sast-gate.jq, sast-gate-recap.jq run with jq -f)
+├─ source tools/job-resources.sh       (+ job-resources.jq run with jq -f)
 ├─ source tools/ci-jobs.sh
 └─ source tools/deps.sh                (+ deps-parse.jq run with jq -f)
 ```
@@ -30,7 +31,7 @@ What `gitlabbox.sh` does, in order:
 
 1. Resolves the script's real location (symlink-safe) → `GLB_ROOT`, `GLB_SELF`.
 2. Sources all libraries and tools.
-3. If the first argument is `__bc_branch`, `__sc_project`, `__sg_project`, `__cj_project` or `__dp_project`, runs that tool's **worker** and exits, skipping the setup below.
+3. If the first argument is `__bc_branch`, `__sc_project`, `__sg_project`, `__jr_project`, `__cj_project` or `__dp_project`, runs that tool's **worker** and exits, skipping the setup below.
 4. Checks dependencies (`curl`, `jq`).
 5. Creates the temp folder `GLB_TMP` (700) and installs `trap`s for cleanup (EXIT) and Ctrl+C (INT/TERM).
 6. `main "$@"` → dispatches to the menu or a command.
@@ -143,6 +144,16 @@ Colors are disabled automatically when stderr is not a TTY, `NO_COLOR` is set, o
 | Analysis | `tools/sast-gate.jq` — latest attempt per gate job → result per pipeline, crosscheck pipelines, tallies per group / day / hour / repo, interval sweep for the runner peak |
 | Output | `sg_to_csv` (`report.csv`), `sg_pipelines_csv`, `tools/sast-gate-recap.jq` (`recap.md`), `sg_print_results`, `sg_summary_box`, `sg_view_report` |
 | UI / CLI | `sg_interactive`, `sg_cli`, `sg_usage` |
+
+## Anatomy of a tool: `tools/job-resources.sh`
+
+| Part | Functions |
+|---|---|
+| Defaults & input | `jr_defaults`; groups and repos via `_sc_add_groups` (kind `group` / `repo`), `_jr_parse_sizes` (`--size` → default + rules), `_jr_compute_period` (reuses `_sg_time`) |
+| Collection | `jr_collect_group IDX` (projects or repos → parallel `jr_worker`), `_jr_jobs` (newest-first paging), `api_get_head` (first KB of a job log), `JR_JQ_LOG` (log → executor, image, runner, `GLB_RES`), `JR_JQ_CI` (merged CI config → `KUBERNETES_*`) |
+| Analysis | `tools/job-resources.jq` — size per run (rule → measured → ci-config → assumed), weighted interval sweep for runs / CPU / memory at once, busiest hour, per job / runner / group |
+| Output | `jr_to_csv` (`report.csv`), `jr_jobs_csv`, `jr_runs_csv`, `jr_print_results`, `jr_summary_box`, `jr_view_report`, `jr_snippet` |
+| UI / CLI | `jr_interactive`, `jr_cli`, `jr_usage` |
 
 Report folders for all tools come from `make_report_dir PARENT TOOL SCOPE` in `lib/config.sh`.
 

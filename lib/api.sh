@@ -100,6 +100,30 @@ api_get() {
   done
 }
 
+# api_get_head PATH OUT MAX_BYTES → the first MAX_BYTES of a plain-text response (e.g. a job log); 0 on 2xx
+#   no retry: a log that cannot be read is skipped, not fatal
+api_get_head() {
+  local args=(-sS -g -f --connect-timeout 10 --max-time "${GLB_TIMEOUT:-60}" -A "gitlabbox/${GLB_VERSION:-dev}") rc code
+  [ "${GLB_INSECURE:-0}" = 1 ] && args+=(-k)
+  [ -n "${GLB_CACERT:-}" ] && args+=(--cacert "$GLB_CACERT")
+  [ -n "${GLB_HDR:-}" ] && args+=(-H "@$GLB_HDR")
+  API_ERROR=
+  curl "${args[@]}" "$GLB_API$1" 2>"$2.err" | head -c "$3" >"$2"
+  rc=${PIPESTATUS[0]}
+  case "$rc" in
+    0 | 23) return 0 ;;   # 23 = head closed the pipe after MAX_BYTES
+    22)
+      code=$(grep -o 'error: [0-9]*' "$2.err" | grep -o '[0-9]*$')
+      case "$code" in
+        403) API_ERROR="403 Forbidden — no access to the job log" ;;
+        404) API_ERROR="404 Not Found — the job log is gone (erased or expired)" ;;
+        *) API_ERROR="HTTP ${code:-error}" ;;
+      esac ;;
+    *) API_ERROR="$(_api_curl_hint "$rc")" ;;
+  esac
+  return 1
+}
+
 # api_get_all PATH OUT_FILE [MAX_ITEMS] [COUNTER_FILE]
 #   merges all pages into one JSON array. MAX_ITEMS=0 → no limit.
 #   API_TRUNCATED=1 when it stopped because of MAX_ITEMS while more data exists.

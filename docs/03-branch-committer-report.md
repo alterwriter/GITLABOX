@@ -225,7 +225,7 @@ Every scan gets its own folder, `reports/<YYYY-MM-DD_HHMM>_branches_<scope>/`, c
 | a `.txt` file `team-x.txt` | `2026-10-19_1015_branches_team-x` |
 | anything else | `2026-10-19_1015_branches_12-repos` |
 
-Names are cut to 24 characters. A second scan in the same minute gets `_2`. The SAST Gate Capacity Planner (`…_capacity_<groups>`), the SAST Gate Pass/Break Recap (`…_sast-gate_<groups>`), the CI Job Detector (`…_ci-jobs_<scope>`), and the Dependency Finder (`…_deps_<scope>`) follow the same pattern.
+Names are cut to 24 characters. A second scan in the same minute gets `_2`. The SAST Gate Capacity Planner (`…_capacity_<groups>`), the SAST Gate Pass/Break Recap (`…_sast-gate_<groups>`), the Job Resource Estimator (`…_job-resources_<scope>`), the CI Job Detector (`…_ci-jobs_<scope>`), and the Dependency Finder (`…_deps_<scope>`) follow the same pattern.
 
 ### Exit codes
 
@@ -266,7 +266,7 @@ Names are cut to 24 characters. A second scan in the same minute gets `_2`. The 
 
 ## Viewing saved reports
 
-The **📊 View saved reports** menu, or `./gitlabbox.sh reports`, lists the 20 most recent reports in `reports/` from all tools (🌿 branches, 🏃 capacity, 🚦 SAST gate, 🔎 CI jobs, 📦 dependencies). Pick one and its tables are shown again without calling the API.
+The **📊 View saved reports** menu, or `./gitlabbox.sh reports`, lists the 20 most recent reports in `reports/` from all tools (🌿 branches, 🏃 capacity, 🚦 SAST gate, 🧮 job resources, 🔎 CI jobs, 📦 dependencies). Pick one and its tables are shown again without calling the API.
 
 ## Performance tips
 

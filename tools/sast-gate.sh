@@ -471,6 +471,7 @@ sg_interactive() {
   while :; do ui_input SG_JOBS "Gate job names" "$SG_JOBS"; [ -n "$(_sc_glob_re "$SG_JOBS")" ] && break; done
 
   UI_HINTS=("Up to now" "Up to now" "Up to now" "e.g. the time the gate went live, up to now" "A start and an end")
+  UI_SELECT_DEFAULT=1
   ui_select k "Period" "Last 24 hours" "Last 7 days (recommended)" "Last 30 days" "Since a date & time" "Custom range" || return
   case "$k" in
     0) SG_HOURS=24 ;;

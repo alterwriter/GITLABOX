@@ -37,6 +37,7 @@ Report files (`reports/*/…`) contain:
 - for the capacity planner: **group and project names** and traffic patterns of your organization.
 - for the CI job detector: which repos have (or lack) security jobs. Treat it as sensitive.
 - for the SAST gate recap: which repos break on the gate, who triggered each pipeline (usernames), and links to the jobs. Share `recap.md` rather than the CSVs when you post it in a chat.
+- for the job resource estimator: runner names, executors, images, and Kubernetes namespaces read from job logs (the log text itself is not saved), and links to the jobs.
 - for the dependency finder: libraries and versions per repo, which can point to vulnerable components. Treat it as sensitive.
 
 Therefore:

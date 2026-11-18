@@ -1,6 +1,6 @@
 # 12. SAST Gate Pass/Break Recap
 
-[← Dependency Finder](11-dependency-finder.md) · [README](../README.md)
+[← Dependency Finder](11-dependency-finder.md) · [Job Resource Estimator →](13-job-resource-estimator.md)
 
 This tool answers: **"In the groups where the SAST gate is live, how many pipelines passed, how many broke, and why?"**
 
