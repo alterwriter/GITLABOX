@@ -143,7 +143,7 @@ cj_worker() {
 
 # ---------- run ----------
 cj_run() {
-  local i t0=$SECONDS host hosts d xpid report outdir
+  local t0=$SECONDS report outdir
   CJ_WORK="$GLB_TMP/cj"
   rm -rf "$CJ_WORK"; mkdir -p "$CJ_WORK/r"
   BC_WORK="$CJ_WORK"
@@ -155,41 +155,8 @@ cj_run() {
   BC_N=${#BC_T_PATH[@]}
   if [ "$BC_N" -eq 0 ]; then ui_err "No valid repos to check."; return 1; fi
 
-  : >"$CJ_WORK/tasks.tsv"; : >"$CJ_WORK/done"
-  for ((i = 0; i < BC_N; i++)); do
-    printf '%s\t%s\t%s\t%s\n' "$i" "${BC_T_HOST[$i]}" "${BC_T_PATH[$i]}" "${BC_T_ERR[$i]}" >>"$CJ_WORK/tasks.tsv"
-  done
   export CJ_WORK CJ_JOB_RE CJ_REF GLB_TIMEOUT GLB_VERSION
-
-  # one parallel batch per GitLab host (each needs its own profile)
-  hosts=$(cut -f2 "$CJ_WORK/tasks.tsv" | sort -u)
-  cursor_hide
-  while IFS= read -r host; do
-    if ! bc_bind_profile "$host"; then
-      awk -F'\t' -v h="$host" '$2 == h {print $1}' "$CJ_WORK/tasks.tsv" | while IFS= read -r i; do
-        jq -n --arg p "$(awk -F'\t' -v i="$i" '$1 == i {print $3}' "$CJ_WORK/tasks.tsv")" --arg e "$BC_BIND_ERR" \
-          '{project: $p, result: "ERROR", error: $e}' >"$CJ_WORK/r/$(printf '%05d' "$i").json"
-        echo "$i" >>"$CJ_WORK/done"
-      done
-      continue
-    fi
-    awk -F'\t' -v h="$host" '$2 == h {print $1}' "$CJ_WORK/tasks.tsv" |
-      xargs -P "$CJ_WORKERS" -n 1 "$GLB_SELF" __cj_project 2>>"$CJ_WORK/worker.log" &
-    xpid=$!
-    BC_XARGS_PID=$xpid
-    while kill -0 "$xpid" 2>/dev/null; do
-      d=$(wc -l <"$CJ_WORK/done" | tr -d ' ')
-      ui_progress "$d" "$BC_N" "repos checked ${DIM}($CJ_WORKERS workers)${RST}"
-      sleep 0.15
-    done
-    wait "$xpid"
-    BC_XARGS_PID=
-  done <<EOF
-$hosts
-EOF
-  ui_progress_end
-  cursor_show
-  bc_bind_profile "" >/dev/null 2>&1
+  bc_run_tasks "$CJ_WORK" __cj_project "$CJ_WORKERS" "repos checked"
 
   report="$CJ_WORK/report.json"
   cat "$CJ_WORK"/r/*.json | jq -s --arg gen "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg ver "$GLB_VERSION" --arg gl "$GLB_URL" \
@@ -362,27 +329,16 @@ EOF
 }
 
 cj_cli() {
-  local line
   cj_defaults
   while [ $# -gt 0 ]; do
     case "$1" in
       --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}"; continue ;;
     esac
+    bc_source_opt "$@"
+    case $? in 0) shift "$BC_OPT_SHIFT"; continue ;; 2) return 1 ;; esac
     case "$1" in
       -h | --help) cj_usage; return 0 ;;
       -p | --profile) BC_PROFILE="$2"; shift 2 ;;
-      -r | --repo) while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(split_targets "$2"); shift 2 ;;
-      -f | --file)
-        [ -f "$2" ] || { ui_err "File '$2' not found."; return 1; }
-        BC_SCOPE="$(basename "${2%.*}")"
-        while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(read_targets_file "$2"); shift 2 ;;
-      -g | --group) while IFS= read -r line; do BC_TARGETS+=("group:$line"); done < <(split_targets "$2"); shift 2 ;;
-      -a | --account)
-        case " $BC_ACCOUNT_SCOPES " in *" $2 "*) ;; *) ui_err "--account: $BC_ACCOUNT_SCOPES"; return 1 ;; esac
-        BC_TARGETS+=("account:$2"); shift 2 ;;
-      --mine) BC_TARGETS+=("account:member"); shift ;;
-      --repo-filter) BC_REPO_FILTER="$2"; shift 2 ;;
-      --include-archived) BC_INCLUDE_ARCHIVED=1; shift ;;
       -j | --jobs) CJ_JOBS="$2"; shift 2 ;;
       --ref) CJ_REF="$2"; shift 2 ;;
       -w | --workers) _bc_is_int "$2" && [ "$2" -ge 1 ] || { ui_err "--workers must be at least 1"; return 1; }; CJ_WORKERS="$2"; shift 2 ;;

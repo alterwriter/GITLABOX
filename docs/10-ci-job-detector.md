@@ -1,6 +1,6 @@
 # 10. CI Job Detector
 
-[← SAST Gate Capacity Planner](09-sast-capacity-planner.md) · [README](../README.md)
+[← SAST Gate Capacity Planner](09-sast-capacity-planner.md) · [Dependency Finder →](11-dependency-finder.md)
 
 This tool answers: **"Which of our repos have a job like `sast:gate` in their pipeline, and did it actually run?"**
 

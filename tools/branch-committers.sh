@@ -527,20 +527,94 @@ reports_browse() {
     case "$f" in
       */summary.json) labels+=("🏃 $d $DIM· $(jq -r '"\(.groups | length) groups · peak \(.verdict.projected_peak) / \(.params.cap_dedicated) · \(if .verdict.fits then "fits" else "does not fit" end)"' "$f" 2>/dev/null)$RST") ;;
       */report.json)
-        if [ "$(jq -r '.tool' "$f" 2>/dev/null)" = ci-jobs ]; then
-          labels+=("🔎 $d $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.found) found · \(.summary.missing) missing"' "$f" 2>/dev/null)$RST")
-        else
-          labels+=("🌿 $d $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.branches_analyzed) branches"' "$f" 2>/dev/null)$RST")
-        fi ;;
+        case "$(jq -r '.tool' "$f" 2>/dev/null)" in
+          ci-jobs) labels+=("🔎 $d $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.found) found · \(.summary.missing) missing"' "$f" 2>/dev/null)$RST") ;;
+          deps) labels+=("📦 $d $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.used) using · \(.options.keywords | join(", "))"' "$f" 2>/dev/null)$RST") ;;
+          *) labels+=("🌿 $d $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.branches_analyzed) branches"' "$f" 2>/dev/null)$RST") ;;
+        esac ;;
       *) labels+=("🌿 $(basename "$f") $DIM· $(jq -r '"\(.summary.repos_total) repos · \(.summary.branches_analyzed) branches"' "$f" 2>/dev/null)$RST") ;;
     esac
   done
   ui_select k "Choose a report" "${labels[@]}" || return
   case "${files[$k]}" in
     */summary.json) sc_view_report "$(dirname "${files[$k]}")" ;;
-    */report.json) if [ "$(jq -r '.tool' "${files[$k]}")" = ci-jobs ]; then cj_view_report "${files[$k]}"; else bc_view_report "${files[$k]}"; fi ;;
+    */report.json)
+      case "$(jq -r '.tool' "${files[$k]}")" in
+        ci-jobs) cj_view_report "${files[$k]}" ;;
+        deps) dp_view_report "${files[$k]}" ;;
+        *) bc_view_report "${files[$k]}" ;;
+      esac ;;
     *) bc_view_report "${files[$k]}" ;;
   esac
+}
+
+# ---------- parallel per-repo tasks (shared with other tools) ----------
+# bc_run_tasks WORK WORKER_CMD WORKERS LABEL
+#   Writes WORK/tasks.tsv (IDX, HOST, PATH, ERR) from BC_T_*, then runs "gitlabbox.sh WORKER_CMD IDX"
+#   via xargs -P, one batch per GitLab host. Workers write WORK/r/IDX.json and append to WORK/done.
+#   Repos whose host has no profile get {project, result: "ERROR", error}.
+bc_run_tasks() {
+  local work="$1" cmd="$2" workers="$3" label="$4" i host d xpid
+  mkdir -p "$work/r"
+  : >"$work/tasks.tsv"; : >"$work/done"
+  for ((i = 0; i < BC_N; i++)); do
+    printf '%s\t%s\t%s\t%s\n' "$i" "${BC_T_HOST[$i]}" "${BC_T_PATH[$i]}" "${BC_T_ERR[$i]}" >>"$work/tasks.tsv"
+  done
+  cursor_hide
+  while IFS= read -r host; do
+    if ! bc_bind_profile "$host"; then
+      awk -F'\t' -v h="$host" '$2 == h {print $1 "\t" $3}' "$work/tasks.tsv" | while IFS=$'\t' read -r i d; do
+        jq -n --arg p "$d" --arg e "$BC_BIND_ERR" '{project: $p, result: "ERROR", error: $e}' \
+          >"$work/r/$(printf '%05d' "$i").json"
+        echo "$i" >>"$work/done"
+      done
+      continue
+    fi
+    awk -F'\t' -v h="$host" '$2 == h {print $1}' "$work/tasks.tsv" |
+      xargs -P "$workers" -n 1 "$GLB_SELF" "$cmd" 2>>"$work/worker.log" &
+    xpid=$!
+    BC_XARGS_PID=$xpid
+    while kill -0 "$xpid" 2>/dev/null; do
+      d=$(wc -l <"$work/done" | tr -d ' ')
+      ui_progress "$d" "$BC_N" "$label ${DIM}($workers workers)${RST}"
+      sleep 0.15
+    done
+    wait "$xpid"
+    BC_XARGS_PID=
+  done < <(cut -f2 "$work/tasks.tsv" | sort -u)
+  ui_progress_end
+  cursor_show
+  bc_bind_profile "" >/dev/null 2>&1
+  return 0
+}
+
+# ---------- repo source flags (shared with other tools' CLIs) ----------
+# Consumes "$1 [$2]" into BC_TARGETS / BC_SCOPE / filters. Sets BC_OPT_SHIFT (args used).
+# Returns 1 when $1 is not a repo-source flag, 2 on a usage error.
+bc_source_opt() {
+  local line
+  BC_OPT_SHIFT=2
+  case "$1" in
+    --mine | --include-archived) BC_OPT_SHIFT=1 ;;
+    -r | --repo | -f | --file | -g | --group | -a | --account | --repo-filter)
+      [ $# -ge 2 ] || { ui_err "$1 needs a value"; return 2; } ;;
+    *) return 1 ;;
+  esac
+  case "$1" in
+    -r | --repo) while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(split_targets "$2") ;;
+    -f | --file)
+      [ -f "$2" ] || { ui_err "File '$2' not found."; return 2; }
+      BC_SCOPE="$(basename "${2%.*}")"
+      while IFS= read -r line; do BC_TARGETS+=("$line"); done < <(read_targets_file "$2") ;;
+    -g | --group) while IFS= read -r line; do BC_TARGETS+=("group:$line"); done < <(split_targets "$2") ;;
+    -a | --account)
+      case " $BC_ACCOUNT_SCOPES " in *" $2 "*) ;; *) ui_err "--account: $BC_ACCOUNT_SCOPES"; return 2 ;; esac
+      BC_TARGETS+=("account:$2") ;;
+    --mine) BC_TARGETS+=("account:member") ;;
+    --repo-filter) BC_REPO_FILTER="$2" ;;
+    --include-archived) BC_INCLUDE_ARCHIVED=1 ;;
+  esac
+  return 0
 }
 
 # ---------- repo source picker (shared with other tools) ----------

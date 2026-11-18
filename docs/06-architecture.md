@@ -21,14 +21,15 @@ gitlabbox.sh               entry point
 ├─ source lib/setup.sh
 ├─ source tools/branch-committers.sh
 ├─ source tools/sast-capacity.sh       (+ sast-capacity.jq, sast-capacity-report.jq run with jq -f)
-└─ source tools/ci-jobs.sh
+├─ source tools/ci-jobs.sh
+└─ source tools/deps.sh                (+ deps-parse.jq run with jq -f)
 ```
 
 What `gitlabbox.sh` does, in order:
 
 1. Resolves the script's real location (symlink-safe) → `GLB_ROOT`, `GLB_SELF`.
 2. Sources all libraries and tools.
-3. If the first argument is `__bc_branch`, `__sc_project` or `__cj_project`, runs that tool's **worker** and exits, skipping the setup below.
+3. If the first argument is `__bc_branch`, `__sc_project`, `__cj_project` or `__dp_project`, runs that tool's **worker** and exits, skipping the setup below.
 4. Checks dependencies (`curl`, `jq`).
 5. Creates the temp folder `GLB_TMP` (700) and installs `trap`s for cleanup (EXIT) and Ctrl+C (INT/TERM).
 6. `main "$@"` → dispatches to the menu or a command.
@@ -98,7 +99,8 @@ Colors are disabled automatically when stderr is not a TTY, `NO_COLOR` is set, o
 | Per repo | `bc_scan_repo IDX` |
 | Tables | `_bc_table`, `bc_print_repo_table`, `bc_print_leaderboard` |
 | Report | `bc_run` (merge + write), `bc_to_csv`, `_bc_out_paths` |
-| UI | `bc_interactive`, `bc_pick_source` (shared repo source picker), `_bc_pick_account`, `bc_view_report`, `reports_browse` |
+| Shared with other tools | `bc_pick_source` (interactive repo source), `bc_source_opt` (repo source flags), `bc_run_tasks` (parallel per-repo workers, one batch per host) |
+| UI | `bc_interactive`, `bc_pick_source`, `_bc_pick_account`, `bc_view_report`, `reports_browse` |
 | CLI | `bc_cli`, `bc_usage` |
 
 ## Anatomy of a tool: `tools/sast-capacity.sh`
@@ -117,9 +119,19 @@ Colors are disabled automatically when stderr is not a TTY, `NO_COLOR` is set, o
 |---|---|
 | Defaults | `cj_defaults` (calls `bc_defaults`: the repo input is shared with the Branch report) |
 | Input | `BC_TARGETS` → `bc_expand_targets`; interactive via `bc_pick_source` |
-| Worker | `cj_worker IDX`: project → CI lint → latest pipeline jobs/bridges → result. Runs via `xargs -P`, one batch per GitLab host. |
+| Worker | `cj_worker IDX`: project → CI lint → latest pipeline jobs/bridges → result. Runs via `bc_run_tasks`. |
 | Output | `cj_to_csv`, `cj_print_table`, `cj_summary_box`, `cj_view_report` |
 | UI / CLI | `cj_interactive`, `cj_cli`, `cj_usage` |
+
+## Anatomy of a tool: `tools/deps.sh`
+
+| Part | Functions |
+|---|---|
+| Defaults & input | `dp_defaults`, `_dp_kw_json` (keywords → `[{kw, re}]`: plain = contains, glob = whole name) |
+| Worker | `dp_worker IDX`: project → tree → manifests (`DP_JQ_FTYPE` picks the type by file name) → `tools/deps-parse.jq` → keyword match → optional code search. Runs via `bc_run_tasks`. |
+| Parsing | `tools/deps-parse.jq`: one parser per manifest type, input is the raw file (`jq -Rs --arg type T`) |
+| Output | `dp_to_csv`, `dp_print_tables`, `dp_summary_box`, `dp_view_report` |
+| UI / CLI | `dp_interactive`, `dp_cli`, `dp_usage` |
 
 Report folders for all tools come from `make_report_dir PARENT TOOL SCOPE` in `lib/config.sh`.
 
